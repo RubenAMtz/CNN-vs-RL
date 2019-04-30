@@ -10,6 +10,8 @@ import pandas as pd
 import keras
 import cv2
 import os
+import glob
+import re
 import sys
 import io
 from imgaug import augmenters as iaa
@@ -43,19 +45,48 @@ import lunar_lander_ml_images_player as ll
     Using TensorFlow backend.
     
 
-## First off we need to define a function for the preprocessing of our pictures, in our case, we will be only resizing the pictures and saving them on disk
+## First off we need to define a function for the preprocessing of our pictures, in our case, we will be only resizing the pictures, converting to grayscale and maybe mixed them in groups of 5 frames, then saving them on disk
 
 
 ```python
-def prepare_images(path_read, path_write):
-    """1) Convert to grayscale, 2) Shrink, 3) Prepare groups of 4 frames??
+# sort files in correct order
+def sorted_aphanumeric(data):
+    convert = lambda text: int(text) if text.isdigit() else text.lower()
+    alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
+    return sorted(data, key=alphanum_key)
+
+def prepare_images(path_read, path_write, mix=False):
+    """1) Convert to grayscale, 2) Shrink, 3) Prepare groups of 5 frames??
+    path_read: string, path to images to prepare
+    path_write: string, path to write new transformed images
+    mix: boolean, mixes a sequence of 5 images if true
     """
-    filenames = os.listdir(path_read)
-    for filename in tqdm.tqdm(filenames):
+    HEIGHT = 84
+    WIDTH = 84
+    
+    filenames = sorted_aphanumeric(os.listdir(path_read))
+    
+    for i, filename in enumerate(tqdm.tqdm(filenames)):
         # image in color
-        image = cv2.imread(os.path.join(path_read,filename), 1) # parameter in imread: #1 = color, #0 = gray, #-1 = unchanged (alpha)
-        resized_image = cv2.resize(image, (84, 84))
-        cv2.imwrite(os.path.join(path_write, filename), resized_image)
+        if not mix:
+            # parameter in imread: #1 = color, #0 = gray, #-1 = unchanged (alpha)
+            image = cv2.imread(os.path.join(path_read,filename), 1) 
+            resized_image = cv2.resize(image, (WIDTH, HEIGTH))
+            cv2.imwrite(os.path.join(path_write, filename), resized_image)
+        else:
+            mixed_image = np.zeros(shape=(WIDTH,HEIGHT), dtype=np.uint8)
+            try:
+                slice_ = filenames[i:i+5]
+            except:
+                slice_ = filenames[i]*5
+            for j, slicedfile in enumerate(slice_):
+                # read image in gray scale
+                image = cv2.imread(os.path.join(path_read,slicedfile), 0) 
+                # resize it
+                resized_image = cv2.resize(image, (WIDTH, HEIGHT))
+                # add it to create sequence effect
+                mixed_image += resized_image
+            cv2.imwrite(os.path.join(path_write, filename), mixed_image)          
 ```
 
 
@@ -275,9 +306,9 @@ def train_val_test(path_read_x, path_read_y):
 X_train, X_val, X_test, y_train_w, y_val_w, y_test_w, y_train, y_val, y_test = train_val_test('transformed-frames/', 'csv/actions_balanced.csv')
 ```
 
-    100%|███████████████████████████████████████████████████████████████████████████| 65149/65149 [03:23<00:00, 319.97it/s]
-    100%|████████████████████████████████████████████████████████████████████████████| 16288/16288 [04:06<00:00, 66.14it/s]
-    100%|████████████████████████████████████████████████████████████████████████████| 34902/34902 [09:15<00:00, 62.83it/s]
+    100%|██████████████████████████████████████████████████████████████████████████| 65149/65149 [13:35<00:00, 79.88it/s]
+    100%|██████████████████████████████████████████████████████████████████████████| 16288/16288 [03:23<00:00, 80.03it/s]
+    100%|██████████████████████████████████████████████████████████████████████████| 34902/34902 [03:00<00:00, 193.83it/s]
     
 
 ## Split and preprocessing is finished, now let's preview some images from our training set
@@ -312,7 +343,7 @@ preview_images()
 
 
 ```python
-def build_VGG16(neurons_lastlayer=256, activation='relu', dropout=0.5):
+def build_VGG16(neurons_lastlayer=[100,50], activation='relu', dropout=0.2):
     """Loads the VGG16 network and modifies it so that a new dense layer on top is trainable
     """
     NUM_OF_CLASSES = 4
@@ -327,9 +358,11 @@ def build_VGG16(neurons_lastlayer=256, activation='relu', dropout=0.5):
 
     # build a classifier model to put on top of the VGG16 model
     x1 = Flatten()(vgg16_last_layer)
-    x2 = Dense(neurons_lastlayer, activation=activation)(x1)
+    x2 = Dense(neurons_lastlayer[0], activation=activation)(x1)
     x3 = Dropout(dropout)(x2)
-    final_layer = Dense(NUM_OF_CLASSES, activation = 'softmax')(x3)
+    x4 = Dense(neurons_lastlayer[1], activation=activation)(x3)
+    x5 = Dropout(dropout)(x4)
+    final_layer = Dense(NUM_OF_CLASSES, activation = 'softmax')(x5)
 
     # Assemble the full model out of both parts
     full_model = keras.Model(vgg16_model.input, final_layer)
@@ -357,7 +390,7 @@ full_model = build_VGG16()
     _________________________________________________________________
     Layer (type)                 Output Shape              Param #   
     =================================================================
-    input_12 (InputLayer)        (None, 84, 84, 3)         0         
+    input_2 (InputLayer)         (None, 84, 84, 3)         0         
     _________________________________________________________________
     block1_conv1 (Conv2D)        (None, 84, 84, 64)        1792      
     _________________________________________________________________
@@ -408,7 +441,7 @@ full_model = build_VGG16()
     _________________________________________________________________
     Layer (type)                 Output Shape              Param #   
     =================================================================
-    input_12 (InputLayer)        (None, 84, 84, 3)         0         
+    input_2 (InputLayer)         (None, 84, 84, 3)         0         
     _________________________________________________________________
     block1_conv1 (Conv2D)        (None, 84, 84, 64)        1792      
     _________________________________________________________________
@@ -446,16 +479,20 @@ full_model = build_VGG16()
     _________________________________________________________________
     block5_pool (MaxPooling2D)   (None, 2, 2, 512)         0         
     _________________________________________________________________
-    flatten_4 (Flatten)          (None, 2048)              0         
+    flatten_2 (Flatten)          (None, 2048)              0         
     _________________________________________________________________
-    dense_6 (Dense)              (None, 256)               524544    
+    dense_4 (Dense)              (None, 100)               204900    
     _________________________________________________________________
-    dropout_4 (Dropout)          (None, 256)               0         
+    dropout_3 (Dropout)          (None, 100)               0         
     _________________________________________________________________
-    dense_7 (Dense)              (None, 4)                 1028      
+    dense_5 (Dense)              (None, 50)                5050      
+    _________________________________________________________________
+    dropout_4 (Dropout)          (None, 50)                0         
+    _________________________________________________________________
+    dense_6 (Dense)              (None, 4)                 204       
     =================================================================
-    Total params: 15,240,260
-    Trainable params: 2,885,380
+    Total params: 14,924,842
+    Trainable params: 2,569,962
     Non-trainable params: 12,354,880
     _________________________________________________________________
     
@@ -465,18 +502,71 @@ full_model = build_VGG16()
 
 ```python
 batch_size = 128
-epochs = 100
+epochs = 25
 
 # Set up the callback to save the best model based on validaion data - notebook 2.2 needs to be run first.
 best_weights_filepath = 'weights/best_weights.hdf5'
 mcp = ModelCheckpoint(best_weights_filepath, monitor="val_loss", save_best_only=True, save_weights_only=False)
 
 history = full_model.fit(X_train, y_train_w, batch_size=batch_size, epochs=epochs, 
-                         verbose = 1, validation_data=(X_val, y_val_w), shuffle=True, callbacks=[mcp])
+                         verbose = 2, validation_data=(X_val, y_val_w), shuffle=True, callbacks=[mcp])
 
 #reload best weights
 full_model.load_weights(best_weights_filepath)
 ```
+
+    Train on 65149 samples, validate on 16288 samples
+    Epoch 1/25
+     - 92s - loss: 0.5332 - acc: 0.7845 - val_loss: 0.3364 - val_acc: 0.8438
+    Epoch 2/25
+     - 91s - loss: 0.3708 - acc: 0.8284 - val_loss: 0.3041 - val_acc: 0.8615
+    Epoch 3/25
+     - 91s - loss: 0.3381 - acc: 0.8443 - val_loss: 0.2896 - val_acc: 0.8707
+    Epoch 4/25
+     - 91s - loss: 0.3174 - acc: 0.8551 - val_loss: 0.2693 - val_acc: 0.8795
+    Epoch 5/25
+     - 91s - loss: 0.3017 - acc: 0.8631 - val_loss: 0.2561 - val_acc: 0.8865
+    Epoch 6/25
+     - 91s - loss: 0.2895 - acc: 0.8690 - val_loss: 0.2507 - val_acc: 0.8882
+    Epoch 7/25
+     - 91s - loss: 0.2798 - acc: 0.8736 - val_loss: 0.2395 - val_acc: 0.8948
+    Epoch 8/25
+     - 91s - loss: 0.2723 - acc: 0.8775 - val_loss: 0.2343 - val_acc: 0.8985
+    Epoch 9/25
+     - 91s - loss: 0.2635 - acc: 0.8817 - val_loss: 0.2317 - val_acc: 0.8979
+    Epoch 10/25
+     - 91s - loss: 0.2572 - acc: 0.8853 - val_loss: 0.2227 - val_acc: 0.9029
+    Epoch 11/25
+     - 91s - loss: 0.2503 - acc: 0.8882 - val_loss: 0.2199 - val_acc: 0.9040
+    Epoch 12/25
+     - 91s - loss: 0.2449 - acc: 0.8919 - val_loss: 0.2148 - val_acc: 0.9059
+    Epoch 13/25
+     - 91s - loss: 0.2400 - acc: 0.8934 - val_loss: 0.2134 - val_acc: 0.9066
+    Epoch 14/25
+     - 91s - loss: 0.2342 - acc: 0.8959 - val_loss: 0.2122 - val_acc: 0.9088
+    Epoch 15/25
+     - 91s - loss: 0.2318 - acc: 0.8978 - val_loss: 0.2059 - val_acc: 0.9097
+    Epoch 16/25
+     - 91s - loss: 0.2277 - acc: 0.8991 - val_loss: 0.2044 - val_acc: 0.9121
+    Epoch 17/25
+     - 91s - loss: 0.2240 - acc: 0.9007 - val_loss: 0.2004 - val_acc: 0.9114
+    Epoch 18/25
+     - 91s - loss: 0.2214 - acc: 0.9017 - val_loss: 0.1979 - val_acc: 0.9131
+    Epoch 19/25
+     - 91s - loss: 0.2182 - acc: 0.9028 - val_loss: 0.1995 - val_acc: 0.9145
+    Epoch 20/25
+     - 91s - loss: 0.2157 - acc: 0.9041 - val_loss: 0.1950 - val_acc: 0.9138
+    Epoch 21/25
+     - 91s - loss: 0.2127 - acc: 0.9054 - val_loss: 0.1941 - val_acc: 0.9156
+    Epoch 22/25
+     - 91s - loss: 0.2108 - acc: 0.9067 - val_loss: 0.1936 - val_acc: 0.9134
+    Epoch 23/25
+     - 91s - loss: 0.2067 - acc: 0.9084 - val_loss: 0.1902 - val_acc: 0.9154
+    Epoch 24/25
+     - 91s - loss: 0.2048 - acc: 0.9091 - val_loss: 0.1902 - val_acc: 0.9159
+    Epoch 25/25
+     - 91s - loss: 0.2048 - acc: 0.9094 - val_loss: 0.1886 - val_acc: 0.9169
+    
 
 ## Training is finished, let's look at the loss graphs for the training and validation sets.
 
@@ -516,27 +606,59 @@ print(metrics.confusion_matrix(y_val, pred))
 
                   precision    recall  f1-score   support
     
-               0       0.90      0.63      0.74      4139
-               1       0.97      0.93      0.95      4041
-               2       0.67      0.94      0.78      4130
-               3       0.97      0.92      0.95      3978
+               0       0.87      0.64      0.74      4139
+               1       0.95      0.89      0.92      4041
+               2       0.67      0.93      0.78      4130
+               3       0.95      0.89      0.92      3978
     
-       micro avg       0.85      0.85      0.85     16288
-       macro avg       0.88      0.85      0.85     16288
-    weighted avg       0.88      0.85      0.85     16288
+       micro avg       0.84      0.84      0.84     16288
+       macro avg       0.86      0.84      0.84     16288
+    weighted avg       0.86      0.84      0.84     16288
     
     Confusion matrix
-    [[2595   27 1498   19]
-     [  44 3741  198   58]
-     [ 202   31 3876   21]
-     [  41   39  221 3677]]
+    [[2659   18 1443   19]
+     [  74 3585  219  163]
+     [ 272   16 3835    7]
+     [  58  144  249 3527]]
+    
+
+## Now, let's see how we do in our test set
+
+
+```python
+# Make a set of predictions for the validation data
+pred = np.argmax(full_model.predict(X_test),axis=1)
+
+# Print performance details
+print(metrics.classification_report(y_test, pred))
+
+print("Confusion matrix")
+print(metrics.confusion_matrix(y_test, pred))
+```
+
+                  precision    recall  f1-score   support
+    
+               0       0.87      0.64      0.74      9065
+               1       0.95      0.89      0.92      8626
+               2       0.67      0.93      0.78      8788
+               3       0.95      0.89      0.92      8423
+    
+       micro avg       0.84      0.84      0.84     34902
+       macro avg       0.86      0.84      0.84     34902
+    weighted avg       0.86      0.84      0.84     34902
+    
+    Confusion matrix
+    [[5824   46 3156   39]
+     [ 177 7695  444  310]
+     [ 533   40 8200   15]
+     [ 152  286  524 7461]]
     
 
 ## Some examples of good and bad predictions:
 
 
 ```python
-def preview_images(mode='correct'):
+def preview_results(mode='correct'):
     fig = plt.figure()
     fig.set_size_inches(18.5, 10.5)
     nrow = 3
@@ -550,9 +672,9 @@ def preview_images(mode='correct'):
         i = 0
     
         while (len(correct_prediction)<10):
-            if pred[i] == y_val.values[i][0]:
+            if pred[i] == y_test.values[i][0]:
                 # class
-                correct_prediction.append(y_val.values[i][0])
+                correct_prediction.append(y_test.values[i][0])
                 # index of class stored
                 index_correct.append(i)
             i += 1
@@ -564,9 +686,9 @@ def preview_images(mode='correct'):
         i = 0
     
         while (len(correct_prediction)<10):
-            if pred[i] != y_val.values[i][0]:
+            if pred[i] != y_test.values[i][0]:
                 # class
-                correct_prediction.append(y_val.values[i][0])
+                correct_prediction.append(y_test.values[i][0])
                 # index of class stored
                 index_correct.append(i)
             i += 1
@@ -575,27 +697,383 @@ def preview_images(mode='correct'):
         index = correct_prediction[i]
         ax = plt.subplot("33"+str(i))
         ax.set_title(action[index], fontsize=15)
-        ax.imshow(X_val[index_correct[i]])
+        ax.imshow(X_test[index_correct[i]])
 
     fig.suptitle("Preview "+ mode +" predictions", fontsize=20)
 ```
 
 
 ```python
-preview_images('correct')
+preview_results('correct')
 ```
 
 
-![png](output_30_0.png)
+![png](output_32_0.png)
 
 
 
 ```python
-preview_images('incorrect')
+preview_results('incorrect')
 ```
 
 
-![png](output_31_0.png)
+![png](output_33_0.png)
+
+
+# WHAT IF...?
+
+
+# What if instead of using a single frame we use a sequence of frames? Maybe the model can capture variables such as speed or acceleration. Let's try this strategy.
+
+
+```python
+# read images in gray scale and resize them
+# mix five frames together (add the matrix values)
+    # each mixed sequence will have a class name equals to that of the main one.
+# once mixing is finished, solve the class imbalance issue.
+```
+
+## First, we prepare our images: transform them to grayscale, resize them to 84x84 and mixed a sequence of 5 frames together
+
+
+```python
+prepare_images('LunarLanderFramesPart1/', 'mixed/', True)
+```
+
+    100%|████████████████████████████████████████████████████████████████████████████| 63671/63671 [26:05<00:00, 40.68it/s]
+    
+
+## We repeat the process as in the previous strategy:
+### Fix the class imbalance, split the data set into train, eval and test sets and train the model.
+
+
+```python
+if not os.path.isfile('csv/actions_mixed_balanced.csv'):
+    fix_class_imbalance('mixed/', 'mixed/')
+    
+if not os.path.isfile('csv/actions_mixed_balanced.csv'):
+    get_actions('mixed/', 'csv/actions_mixed_balanced.csv')
+    actions = pd.read_csv('csv/actions_mixed_balanced.csv')
+    count = actions.groupby('actions')['actions'].count()
+
+    n = len(count)
+    colors = plt.cm.jet(np.linspace(0, 1, n))
+
+    fig = plt.figure()
+    fig.set_size_inches(18.5, 10.5)
+    plt.bar(['None', "Up", "Left", "Right"], count, color=colors)
+    plt.ylabel('Samples')
+    plt.xticks(fontsize =20)
+    plt.title("Action distribution (mixed images)", fontsize=30)
+    plt.show()
+```
+
+
+![png](output_39_0.png)
+
+
+
+```python
+X_train, X_val, X_test, y_train_w, y_val_w, y_test_w, y_train, y_val, y_test = train_val_test('mixed/', 'csv/actions_mixed_balanced.csv')
+```
+
+    100%|█████████████████████████████████████████████████████████████████████████████| 65149/65149 [15:36<00:00, 69.59it/s]
+    100%|█████████████████████████████████████████████████████████████████████████████| 16288/16288 [03:52<00:00, 69.95it/s]
+    100%|█████████████████████████████████████████████████████████████████████████████| 34902/34902 [08:19<00:00, 69.89it/s]
+    
+
+## Now, let's take a look to the resulting images from our training set
+
+
+```python
+preview_images()
+```
+
+
+![png](output_42_0.png)
+
+
+## Build a new model and set it up for training.
+
+
+```python
+full_model_mixed = build_VGG16()
+
+batch_size = 128
+epochs = 25
+
+# Set up the callback to save the best model based on validaion data - notebook 2.2 needs to be run first.
+best_weights_filepath = 'weights/best_weights_mixed.hdf5'
+mcp = ModelCheckpoint(best_weights_filepath, monitor="val_loss", save_best_only=True, save_weights_only=False)
+
+history = full_model_mixed.fit(X_train, y_train_w, batch_size=batch_size, epochs=epochs, 
+                         verbose = 2, validation_data=(X_val, y_val_w), shuffle=True, callbacks=[mcp])
+
+#reload best weights
+full_model_mixed.load_weights(best_weights_filepath)
+```
+
+    _________________________________________________________________
+    Layer (type)                 Output Shape              Param #   
+    =================================================================
+    input_4 (InputLayer)         (None, 84, 84, 3)         0         
+    _________________________________________________________________
+    block1_conv1 (Conv2D)        (None, 84, 84, 64)        1792      
+    _________________________________________________________________
+    block1_conv2 (Conv2D)        (None, 84, 84, 64)        36928     
+    _________________________________________________________________
+    block1_pool (MaxPooling2D)   (None, 42, 42, 64)        0         
+    _________________________________________________________________
+    block2_conv1 (Conv2D)        (None, 42, 42, 128)       73856     
+    _________________________________________________________________
+    block2_conv2 (Conv2D)        (None, 42, 42, 128)       147584    
+    _________________________________________________________________
+    block2_pool (MaxPooling2D)   (None, 21, 21, 128)       0         
+    _________________________________________________________________
+    block3_conv1 (Conv2D)        (None, 21, 21, 256)       295168    
+    _________________________________________________________________
+    block3_conv2 (Conv2D)        (None, 21, 21, 256)       590080    
+    _________________________________________________________________
+    block3_conv3 (Conv2D)        (None, 21, 21, 256)       590080    
+    _________________________________________________________________
+    block3_pool (MaxPooling2D)   (None, 10, 10, 256)       0         
+    _________________________________________________________________
+    block4_conv1 (Conv2D)        (None, 10, 10, 512)       1180160   
+    _________________________________________________________________
+    block4_conv2 (Conv2D)        (None, 10, 10, 512)       2359808   
+    _________________________________________________________________
+    block4_conv3 (Conv2D)        (None, 10, 10, 512)       2359808   
+    _________________________________________________________________
+    block4_pool (MaxPooling2D)   (None, 5, 5, 512)         0         
+    _________________________________________________________________
+    block5_conv1 (Conv2D)        (None, 5, 5, 512)         2359808   
+    _________________________________________________________________
+    block5_conv2 (Conv2D)        (None, 5, 5, 512)         2359808   
+    _________________________________________________________________
+    block5_conv3 (Conv2D)        (None, 5, 5, 512)         2359808   
+    _________________________________________________________________
+    block5_pool (MaxPooling2D)   (None, 2, 2, 512)         0         
+    =================================================================
+    Total params: 14,714,688
+    Trainable params: 14,714,688
+    Non-trainable params: 0
+    _________________________________________________________________
+    
+
+
+    None
+
+
+    _________________________________________________________________
+    Layer (type)                 Output Shape              Param #   
+    =================================================================
+    input_4 (InputLayer)         (None, 84, 84, 3)         0         
+    _________________________________________________________________
+    block1_conv1 (Conv2D)        (None, 84, 84, 64)        1792      
+    _________________________________________________________________
+    block1_conv2 (Conv2D)        (None, 84, 84, 64)        36928     
+    _________________________________________________________________
+    block1_pool (MaxPooling2D)   (None, 42, 42, 64)        0         
+    _________________________________________________________________
+    block2_conv1 (Conv2D)        (None, 42, 42, 128)       73856     
+    _________________________________________________________________
+    block2_conv2 (Conv2D)        (None, 42, 42, 128)       147584    
+    _________________________________________________________________
+    block2_pool (MaxPooling2D)   (None, 21, 21, 128)       0         
+    _________________________________________________________________
+    block3_conv1 (Conv2D)        (None, 21, 21, 256)       295168    
+    _________________________________________________________________
+    block3_conv2 (Conv2D)        (None, 21, 21, 256)       590080    
+    _________________________________________________________________
+    block3_conv3 (Conv2D)        (None, 21, 21, 256)       590080    
+    _________________________________________________________________
+    block3_pool (MaxPooling2D)   (None, 10, 10, 256)       0         
+    _________________________________________________________________
+    block4_conv1 (Conv2D)        (None, 10, 10, 512)       1180160   
+    _________________________________________________________________
+    block4_conv2 (Conv2D)        (None, 10, 10, 512)       2359808   
+    _________________________________________________________________
+    block4_conv3 (Conv2D)        (None, 10, 10, 512)       2359808   
+    _________________________________________________________________
+    block4_pool (MaxPooling2D)   (None, 5, 5, 512)         0         
+    _________________________________________________________________
+    block5_conv1 (Conv2D)        (None, 5, 5, 512)         2359808   
+    _________________________________________________________________
+    block5_conv2 (Conv2D)        (None, 5, 5, 512)         2359808   
+    _________________________________________________________________
+    block5_conv3 (Conv2D)        (None, 5, 5, 512)         2359808   
+    _________________________________________________________________
+    block5_pool (MaxPooling2D)   (None, 2, 2, 512)         0         
+    _________________________________________________________________
+    flatten_4 (Flatten)          (None, 2048)              0         
+    _________________________________________________________________
+    dense_10 (Dense)             (None, 100)               204900    
+    _________________________________________________________________
+    dropout_7 (Dropout)          (None, 100)               0         
+    _________________________________________________________________
+    dense_11 (Dense)             (None, 50)                5050      
+    _________________________________________________________________
+    dropout_8 (Dropout)          (None, 50)                0         
+    _________________________________________________________________
+    dense_12 (Dense)             (None, 4)                 204       
+    =================================================================
+    Total params: 14,924,842
+    Trainable params: 2,569,962
+    Non-trainable params: 12,354,880
+    _________________________________________________________________
+    Train on 65149 samples, validate on 16288 samples
+    Epoch 1/25
+     - 91s - loss: 0.5547 - acc: 0.7659 - val_loss: 0.3584 - val_acc: 0.8283
+    Epoch 2/25
+     - 91s - loss: 0.3907 - acc: 0.8131 - val_loss: 0.3235 - val_acc: 0.8498
+    Epoch 3/25
+     - 91s - loss: 0.3613 - acc: 0.8279 - val_loss: 0.3114 - val_acc: 0.8566
+    Epoch 4/25
+     - 91s - loss: 0.3425 - acc: 0.8382 - val_loss: 0.2921 - val_acc: 0.8692
+    Epoch 5/25
+     - 91s - loss: 0.3254 - acc: 0.8472 - val_loss: 0.2823 - val_acc: 0.8735
+    Epoch 6/25
+     - 91s - loss: 0.3127 - acc: 0.8543 - val_loss: 0.2727 - val_acc: 0.8756
+    Epoch 7/25
+     - 91s - loss: 0.3036 - acc: 0.8601 - val_loss: 0.2652 - val_acc: 0.8809
+    Epoch 8/25
+     - 91s - loss: 0.2934 - acc: 0.8658 - val_loss: 0.2560 - val_acc: 0.8865
+    Epoch 9/25
+     - 91s - loss: 0.2861 - acc: 0.8697 - val_loss: 0.2495 - val_acc: 0.8919
+    Epoch 10/25
+     - 91s - loss: 0.2785 - acc: 0.8733 - val_loss: 0.2468 - val_acc: 0.8902
+    Epoch 11/25
+     - 91s - loss: 0.2704 - acc: 0.8780 - val_loss: 0.2394 - val_acc: 0.8957
+    Epoch 12/25
+     - 91s - loss: 0.2648 - acc: 0.8804 - val_loss: 0.2359 - val_acc: 0.8977
+    Epoch 13/25
+     - 91s - loss: 0.2586 - acc: 0.8838 - val_loss: 0.2340 - val_acc: 0.8982
+    Epoch 14/25
+     - 91s - loss: 0.2543 - acc: 0.8855 - val_loss: 0.2311 - val_acc: 0.8964
+    Epoch 15/25
+     - 91s - loss: 0.2490 - acc: 0.8885 - val_loss: 0.2267 - val_acc: 0.8983
+    Epoch 16/25
+     - 91s - loss: 0.2445 - acc: 0.8901 - val_loss: 0.2215 - val_acc: 0.9018
+    Epoch 17/25
+     - 91s - loss: 0.2418 - acc: 0.8913 - val_loss: 0.2192 - val_acc: 0.9033
+    Epoch 18/25
+     - 91s - loss: 0.2371 - acc: 0.8941 - val_loss: 0.2160 - val_acc: 0.9066
+    Epoch 19/25
+     - 91s - loss: 0.2339 - acc: 0.8954 - val_loss: 0.2121 - val_acc: 0.9064
+    Epoch 20/25
+     - 91s - loss: 0.2306 - acc: 0.8970 - val_loss: 0.2133 - val_acc: 0.9081
+    Epoch 21/25
+     - 91s - loss: 0.2273 - acc: 0.8987 - val_loss: 0.2086 - val_acc: 0.9093
+    Epoch 22/25
+     - 91s - loss: 0.2241 - acc: 0.8998 - val_loss: 0.2106 - val_acc: 0.9091
+    Epoch 23/25
+     - 91s - loss: 0.2211 - acc: 0.9011 - val_loss: 0.2078 - val_acc: 0.9094
+    Epoch 24/25
+     - 91s - loss: 0.2181 - acc: 0.9026 - val_loss: 0.2041 - val_acc: 0.9106
+    Epoch 25/25
+     - 91s - loss: 0.2167 - acc: 0.9031 - val_loss: 0.2060 - val_acc: 0.9103
+    
+
+## Training is finished, let's take a look at the evolution of the losses
+
+
+```python
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+fig = plt.figure()
+fig.set_size_inches(18.5, 10.5)
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.plot(loss, 'blue', label='Training Loss')
+plt.plot(val_loss, 'green', label='Validation Loss')
+plt.xticks(range(0,epochs)[0::2])
+plt.legend()
+plt.show()
+```
+
+
+![png](output_46_0.png)
+
+
+
+```python
+# Make a set of predictions for the validation data
+pred = np.argmax(full_model_mixed.predict(X_val),axis=1)
+
+# Print performance details
+print(metrics.classification_report(y_val, pred))
+
+print("Confusion matrix")
+print(metrics.confusion_matrix(y_val, pred))
+```
+
+                  precision    recall  f1-score   support
+    
+               0       0.83      0.64      0.73      4139
+               1       0.93      0.88      0.91      4041
+               2       0.66      0.91      0.77      4130
+               3       0.95      0.87      0.90      3978
+    
+       micro avg       0.82      0.82      0.82     16288
+       macro avg       0.84      0.82      0.83     16288
+    weighted avg       0.84      0.82      0.82     16288
+    
+    Confusion matrix
+    [[2666   36 1397   40]
+     [  93 3560  247  141]
+     [ 351   18 3745   16]
+     [  83  200  254 3441]]
+    
+
+
+```python
+# Make a set of predictions for the test data
+pred = np.argmax(full_model_mixed.predict(X_test),axis=1)
+
+# Print performance details
+print(metrics.classification_report(y_test, pred))
+
+print("Confusion matrix")
+print(metrics.confusion_matrix(y_test, pred))
+```
+
+                  precision    recall  f1-score   support
+    
+               0       0.83      0.65      0.73      9065
+               1       0.93      0.88      0.91      8626
+               2       0.66      0.91      0.76      8788
+               3       0.95      0.85      0.90      8423
+    
+       micro avg       0.82      0.82      0.82     34902
+       macro avg       0.84      0.82      0.82     34902
+    weighted avg       0.84      0.82      0.82     34902
+    
+    Confusion matrix
+    [[5870   52 3072   71]
+     [ 200 7625  518  283]
+     [ 760   19 7989   20]
+     [ 242  484  546 7151]]
+    
+
+# Comparing these results vs the results from the single frame strategy we can see that this strategy did worst than the previous one in terms of classification, however, the results are not shockingly surprising, as we are making predictions out of a single image, when in fact we learnt to predict from a sequence of images. However, this problem might be minimized as we will feed on a sequence of images, instead of a single frame to our current classifier when testing the actual performance.
+
+
+```python
+preview_results('correct')
+```
+
+
+![png](output_50_0.png)
+
+
+
+```python
+preview_results('incorrect')
+```
+
+
+![png](output_51_0.png)
 
 
 # Reinforcement Learning Section
@@ -654,30 +1132,264 @@ dqn.test(env, nb_episodes=50, visualize=True)
 
 ```
 
+    _________________________________________________________________
+    Layer (type)                 Output Shape              Param #   
+    =================================================================
+    flatten_1 (Flatten)          (None, 8)                 0         
+    _________________________________________________________________
+    dense_1 (Dense)              (None, 50)                450       
+    _________________________________________________________________
+    activation_1 (Activation)    (None, 50)                0         
+    _________________________________________________________________
+    dense_2 (Dense)              (None, 30)                1530      
+    _________________________________________________________________
+    activation_2 (Activation)    (None, 30)                0         
+    _________________________________________________________________
+    dense_3 (Dense)              (None, 16)                496       
+    _________________________________________________________________
+    activation_3 (Activation)    (None, 16)                0         
+    _________________________________________________________________
+    dense_4 (Dense)              (None, 4)                 68        
+    _________________________________________________________________
+    activation_4 (Activation)    (None, 4)                 0         
+    =================================================================
+    Total params: 2,544
+    Trainable params: 2,544
+    Non-trainable params: 0
+    _________________________________________________________________
+    None
+    Training for 100000 steps ...
+    
+
     c:\users\ruben\docume~1\ucd\18-19_~2\comp47~1\ml_env\lib\site-packages\rl\memory.py:39: UserWarning: Not enough entries to sample without replacement. Consider increasing your warm-up phase to avoid oversampling!
       warnings.warn('Not enough entries to sample without replacement. Consider increasing your warm-up phase to avoid oversampling!')
+    
+
+        78/100000: episode: 1, duration: 5.240s, episode steps: 78, steps per second: 15, episode reward: -94.585, mean reward: -1.213 [-100.000, 14.080], mean action: 1.705 [0.000, 3.000], mean observation: 0.080 [-1.480, 1.399], loss: 1.655223, mean_absolute_error: 0.478007, mean_q: 0.266833
+       160/100000: episode: 2, duration: 1.364s, episode steps: 82, steps per second: 60, episode reward: -367.474, mean reward: -4.481 [-100.000, 0.708], mean action: 1.585 [0.000, 3.000], mean observation: 0.292 [-1.282, 1.806], loss: 43.903004, mean_absolute_error: 1.030369, mean_q: 0.926637
+       235/100000: episode: 3, duration: 1.248s, episode steps: 75, steps per second: 60, episode reward: -346.710, mean reward: -4.623 [-100.000, 3.947], mean action: 1.653 [0.000, 3.000], mean observation: 0.022 [-4.779, 1.622], loss: 63.828690, mean_absolute_error: 2.333868, mean_q: -0.083194
+       468/100000: episode: 4, duration: 3.881s, episode steps: 233, steps per second: 60, episode reward: -202.234, mean reward: -0.868 [-100.000, 9.574], mean action: 1.567 [0.000, 3.000], mean observation: 0.119 [-1.465, 1.403], loss: 37.815796, mean_absolute_error: 3.887509, mean_q: -0.626614
+       581/100000: episode: 5, duration: 1.882s, episode steps: 113, steps per second: 60, episode reward: -144.868, mean reward: -1.282 [-100.000, 7.434], mean action: 1.770 [0.000, 3.000], mean observation: 0.024 [-0.974, 3.535], loss: 29.739073, mean_absolute_error: 4.147604, mean_q: -0.315538
+       740/100000: episode: 6, duration: 2.646s, episode steps: 159, steps per second: 60, episode reward: -66.546, mean reward: -0.419 [-100.000, 9.073], mean action: 1.635 [0.000, 3.000], mean observation: 0.117 [-3.377, 1.392], loss: 17.821541, mean_absolute_error: 4.954693, mean_q: -0.140628
+       847/100000: episode: 7, duration: 1.782s, episode steps: 107, steps per second: 60, episode reward: -262.623, mean reward: -2.454 [-100.000, 10.621], mean action: 1.748 [0.000, 3.000], mean observation: 0.235 [-1.575, 4.119], loss: 15.407992, mean_absolute_error: 5.219170, mean_q: 0.965483
+       962/100000: episode: 8, duration: 1.913s, episode steps: 115, steps per second: 60, episode reward: -120.595, mean reward: -1.049 [-100.000, 10.373], mean action: 1.643 [0.000, 3.000], mean observation: 0.047 [-1.229, 2.853], loss: 21.413191, mean_absolute_error: 6.290402, mean_q: 1.231818
+      1110/100000: episode: 9, duration: 2.467s, episode steps: 148, steps per second: 60, episode reward: 15.194, mean reward: 0.103 [-100.000, 14.500], mean action: 1.791 [0.000, 3.000], mean observation: 0.033 [-0.637, 1.385], loss: 14.907573, mean_absolute_error: 6.840449, mean_q: 1.956968
+      1231/100000: episode: 10, duration: 2.014s, episode steps: 121, steps per second: 60, episode reward: -107.905, mean reward: -0.892 [-100.000, 4.625], mean action: 1.843 [0.000, 3.000], mean observation: -0.008 [-1.009, 3.348], loss: 19.023720, mean_absolute_error: 7.815130, mean_q: 2.300075
+      1400/100000: episode: 11, duration: 2.815s, episode steps: 169, steps per second: 60, episode reward: -42.486, mean reward: -0.251 [-100.000, 5.942], mean action: 1.669 [0.000, 3.000], mean observation: 0.118 [-0.757, 2.727], loss: 16.129007, mean_absolute_error: 8.556323, mean_q: 2.825870
+      1561/100000: episode: 12, duration: 2.680s, episode steps: 161, steps per second: 60, episode reward: -66.786, mean reward: -0.415 [-100.000, 15.371], mean action: 1.540 [0.000, 3.000], mean observation: -0.032 [-0.742, 1.458], loss: 12.910284, mean_absolute_error: 9.244790, mean_q: 2.891016
+      1724/100000: episode: 13, duration: 2.715s, episode steps: 163, steps per second: 60, episode reward: -13.116, mean reward: -0.080 [-100.000, 14.773], mean action: 1.620 [0.000, 3.000], mean observation: 0.166 [-0.823, 2.421], loss: 14.885831, mean_absolute_error: 10.354947, mean_q: 3.034768
+      1886/100000: episode: 14, duration: 2.699s, episode steps: 162, steps per second: 60, episode reward: -55.430, mean reward: -0.342 [-100.000, 8.251], mean action: 1.648 [0.000, 3.000], mean observation: 0.005 [-1.002, 1.871], loss: 17.590023, mean_absolute_error: 11.271637, mean_q: 2.882983
+      2025/100000: episode: 15, duration: 2.315s, episode steps: 139, steps per second: 60, episode reward: -6.665, mean reward: -0.048 [-100.000, 19.863], mean action: 1.547 [0.000, 3.000], mean observation: -0.029 [-0.862, 1.809], loss: 21.548168, mean_absolute_error: 12.474604, mean_q: 2.454247
+      2243/100000: episode: 16, duration: 3.630s, episode steps: 218, steps per second: 60, episode reward: -29.048, mean reward: -0.133 [-100.000, 19.714], mean action: 1.716 [0.000, 3.000], mean observation: 0.096 [-2.713, 1.525], loss: 11.142531, mean_absolute_error: 13.448415, mean_q: 1.908160
+      2441/100000: episode: 17, duration: 3.298s, episode steps: 198, steps per second: 60, episode reward: 43.362, mean reward: 0.219 [-100.000, 15.196], mean action: 1.768 [0.000, 3.000], mean observation: 0.037 [-0.682, 1.450], loss: 14.184050, mean_absolute_error: 13.702408, mean_q: 2.916291
+      2588/100000: episode: 18, duration: 2.448s, episode steps: 147, steps per second: 60, episode reward: -22.132, mean reward: -0.151 [-100.000, 19.631], mean action: 1.531 [0.000, 3.000], mean observation: 0.096 [-1.687, 1.393], loss: 17.580347, mean_absolute_error: 14.147529, mean_q: 3.092083
+      2907/100000: episode: 19, duration: 5.314s, episode steps: 319, steps per second: 60, episode reward: 12.455, mean reward: 0.039 [-100.000, 13.885], mean action: 1.558 [0.000, 3.000], mean observation: 0.116 [-0.591, 1.525], loss: 11.600239, mean_absolute_error: 14.706293, mean_q: 4.050381
+      3082/100000: episode: 20, duration: 2.914s, episode steps: 175, steps per second: 60, episode reward: -30.835, mean reward: -0.176 [-100.000, 18.900], mean action: 1.726 [0.000, 3.000], mean observation: 0.078 [-1.669, 1.398], loss: 11.635803, mean_absolute_error: 15.566802, mean_q: 4.094034
+      4082/100000: episode: 21, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: -71.544, mean reward: -0.072 [-5.870, 5.255], mean action: 1.775 [0.000, 3.000], mean observation: 0.023 [-0.570, 1.409], loss: 8.153481, mean_absolute_error: 16.617338, mean_q: 4.631436
+      4312/100000: episode: 22, duration: 3.829s, episode steps: 230, steps per second: 60, episode reward: -10.728, mean reward: -0.047 [-100.000, 7.889], mean action: 1.713 [0.000, 3.000], mean observation: -0.025 [-0.859, 1.478], loss: 5.606262, mean_absolute_error: 17.402254, mean_q: 5.143651
+      4443/100000: episode: 23, duration: 2.180s, episode steps: 131, steps per second: 60, episode reward: 37.217, mean reward: 0.284 [-100.000, 11.140], mean action: 1.695 [0.000, 3.000], mean observation: 0.100 [-0.743, 1.412], loss: 4.814556, mean_absolute_error: 18.136492, mean_q: 6.517039
+      4690/100000: episode: 24, duration: 4.114s, episode steps: 247, steps per second: 60, episode reward: 25.596, mean reward: 0.104 [-100.000, 19.407], mean action: 1.696 [0.000, 3.000], mean observation: 0.035 [-0.849, 1.403], loss: 5.177142, mean_absolute_error: 18.868172, mean_q: 7.183980
+      5030/100000: episode: 25, duration: 5.663s, episode steps: 340, steps per second: 60, episode reward: 0.283, mean reward: 0.001 [-100.000, 12.116], mean action: 1.712 [0.000, 3.000], mean observation: 0.047 [-0.765, 1.423], loss: 6.125842, mean_absolute_error: 19.420563, mean_q: 8.430383
+      5496/100000: episode: 26, duration: 7.763s, episode steps: 466, steps per second: 60, episode reward: -101.245, mean reward: -0.217 [-100.000, 12.127], mean action: 1.779 [0.000, 3.000], mean observation: -0.007 [-0.542, 1.397], loss: 4.355960, mean_absolute_error: 20.152134, mean_q: 9.595497
+      5953/100000: episode: 27, duration: 7.612s, episode steps: 457, steps per second: 60, episode reward: 204.264, mean reward: 0.447 [-9.074, 100.000], mean action: 1.446 [0.000, 3.000], mean observation: 0.010 [-0.660, 1.523], loss: 5.605393, mean_absolute_error: 21.367771, mean_q: 9.560315
+      6245/100000: episode: 28, duration: 4.865s, episode steps: 292, steps per second: 60, episode reward: -82.223, mean reward: -0.282 [-100.000, 16.297], mean action: 1.788 [0.000, 3.000], mean observation: -0.063 [-1.047, 1.396], loss: 7.196392, mean_absolute_error: 22.377464, mean_q: 10.951176
+      6697/100000: episode: 29, duration: 7.545s, episode steps: 452, steps per second: 60, episode reward: -100.535, mean reward: -0.222 [-100.000, 14.114], mean action: 1.657 [0.000, 3.000], mean observation: -0.018 [-1.068, 1.398], loss: 8.043255, mean_absolute_error: 22.859884, mean_q: 11.503370
+      6981/100000: episode: 30, duration: 4.731s, episode steps: 284, steps per second: 60, episode reward: 12.316, mean reward: 0.043 [-100.000, 10.416], mean action: 1.736 [0.000, 3.000], mean observation: 0.063 [-0.605, 1.427], loss: 4.366754, mean_absolute_error: 23.126850, mean_q: 12.500676
+      7549/100000: episode: 31, duration: 9.463s, episode steps: 568, steps per second: 60, episode reward: -125.338, mean reward: -0.221 [-100.000, 19.498], mean action: 1.824 [0.000, 3.000], mean observation: -0.009 [-1.049, 1.480], loss: 7.294110, mean_absolute_error: 23.794258, mean_q: 13.732470
+      8549/100000: episode: 32, duration: 16.695s, episode steps: 1000, steps per second: 60, episode reward: -5.873, mean reward: -0.006 [-21.165, 22.613], mean action: 1.800 [0.000, 3.000], mean observation: 0.056 [-0.662, 1.405], loss: 6.568153, mean_absolute_error: 24.452061, mean_q: 14.314157
+      9549/100000: episode: 33, duration: 16.674s, episode steps: 1000, steps per second: 60, episode reward: -16.301, mean reward: -0.016 [-22.048, 18.365], mean action: 1.832 [0.000, 3.000], mean observation: 0.039 [-0.686, 1.435], loss: 8.801104, mean_absolute_error: 24.506351, mean_q: 16.931526
+     10549/100000: episode: 34, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: -48.875, mean reward: -0.049 [-13.993, 14.516], mean action: 1.825 [0.000, 3.000], mean observation: 0.049 [-0.708, 1.411], loss: 6.005484, mean_absolute_error: 24.328192, mean_q: 20.959282
+     11549/100000: episode: 35, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: -41.992, mean reward: -0.042 [-11.950, 15.511], mean action: 1.734 [0.000, 3.000], mean observation: 0.025 [-0.590, 1.397], loss: 7.588581, mean_absolute_error: 24.220280, mean_q: 23.302238
+     12549/100000: episode: 36, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: -50.533, mean reward: -0.051 [-4.786, 4.720], mean action: 1.777 [0.000, 3.000], mean observation: 0.099 [-0.729, 1.410], loss: 8.251533, mean_absolute_error: 24.951536, mean_q: 27.246500
+     13549/100000: episode: 37, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: -32.829, mean reward: -0.033 [-5.069, 4.784], mean action: 1.810 [0.000, 3.000], mean observation: 0.132 [-0.927, 1.507], loss: 7.680722, mean_absolute_error: 25.577450, mean_q: 29.976246
+     14549/100000: episode: 38, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: -63.827, mean reward: -0.064 [-4.894, 4.362], mean action: 1.790 [0.000, 3.000], mean observation: 0.086 [-0.507, 1.397], loss: 6.248765, mean_absolute_error: 26.014080, mean_q: 31.832664
+     15549/100000: episode: 39, duration: 16.657s, episode steps: 1000, steps per second: 60, episode reward: 60.065, mean reward: 0.060 [-23.747, 23.787], mean action: 1.658 [0.000, 3.000], mean observation: 0.027 [-0.676, 1.512], loss: 7.428494, mean_absolute_error: 26.663801, mean_q: 33.170563
+     15788/100000: episode: 40, duration: 3.979s, episode steps: 239, steps per second: 60, episode reward: -94.028, mean reward: -0.393 [-100.000, 5.690], mean action: 1.636 [0.000, 3.000], mean observation: 0.209 [-0.607, 1.408], loss: 5.258610, mean_absolute_error: 26.612446, mean_q: 33.507809
+     16788/100000: episode: 41, duration: 16.677s, episode steps: 1000, steps per second: 60, episode reward: -70.610, mean reward: -0.071 [-5.056, 4.715], mean action: 1.852 [0.000, 3.000], mean observation: 0.131 [-0.649, 1.520], loss: 7.747142, mean_absolute_error: 26.962641, mean_q: 34.167595
+     17788/100000: episode: 42, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: -1.714, mean reward: -0.002 [-19.022, 14.646], mean action: 1.699 [0.000, 3.000], mean observation: 0.020 [-0.578, 1.404], loss: 5.787479, mean_absolute_error: 26.781807, mean_q: 34.276783
+     18757/100000: episode: 43, duration: 16.141s, episode steps: 969, steps per second: 60, episode reward: -263.766, mean reward: -0.272 [-100.000, 27.359], mean action: 1.543 [0.000, 3.000], mean observation: 0.061 [-1.647, 1.399], loss: 5.514292, mean_absolute_error: 26.203638, mean_q: 33.460854
+     19757/100000: episode: 44, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 0.005, mean reward: 0.000 [-23.618, 26.269], mean action: 1.665 [0.000, 3.000], mean observation: 0.036 [-0.664, 1.391], loss: 6.510881, mean_absolute_error: 26.158669, mean_q: 33.048492
+     19899/100000: episode: 45, duration: 2.363s, episode steps: 142, steps per second: 60, episode reward: 11.899, mean reward: 0.084 [-100.000, 14.580], mean action: 1.585 [0.000, 3.000], mean observation: 0.029 [-1.470, 1.453], loss: 6.350694, mean_absolute_error: 25.339836, mean_q: 31.783207
+     20899/100000: episode: 46, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 28.333, mean reward: 0.028 [-22.856, 22.736], mean action: 1.684 [0.000, 3.000], mean observation: 0.031 [-0.690, 1.398], loss: 6.059417, mean_absolute_error: 25.627676, mean_q: 32.345432
+     21899/100000: episode: 47, duration: 16.675s, episode steps: 1000, steps per second: 60, episode reward: 20.886, mean reward: 0.021 [-23.291, 22.699], mean action: 1.613 [0.000, 3.000], mean observation: 0.031 [-0.716, 1.505], loss: 5.255508, mean_absolute_error: 25.677301, mean_q: 32.139118
+     22899/100000: episode: 48, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: -101.806, mean reward: -0.102 [-21.787, 13.959], mean action: 1.653 [0.000, 3.000], mean observation: 0.078 [-0.774, 1.399], loss: 5.498784, mean_absolute_error: 25.739601, mean_q: 32.236904
+     23899/100000: episode: 49, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: -58.309, mean reward: -0.058 [-22.005, 22.423], mean action: 1.719 [0.000, 3.000], mean observation: 0.053 [-0.704, 1.407], loss: 5.275645, mean_absolute_error: 25.380211, mean_q: 31.815540
+     24899/100000: episode: 50, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 26.813, mean reward: 0.027 [-21.168, 22.912], mean action: 1.717 [0.000, 3.000], mean observation: 0.044 [-1.451, 1.395], loss: 5.933324, mean_absolute_error: 24.932688, mean_q: 31.209023
+     25899/100000: episode: 51, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: -18.223, mean reward: -0.018 [-24.082, 22.797], mean action: 1.711 [0.000, 3.000], mean observation: 0.075 [-0.529, 1.419], loss: 5.769436, mean_absolute_error: 25.725969, mean_q: 32.686790
+     26899/100000: episode: 52, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: -32.193, mean reward: -0.032 [-22.934, 23.687], mean action: 1.758 [0.000, 3.000], mean observation: 0.079 [-0.584, 1.419], loss: 4.804567, mean_absolute_error: 25.828096, mean_q: 33.020855
+     27899/100000: episode: 53, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: -5.903, mean reward: -0.006 [-21.362, 22.276], mean action: 1.643 [0.000, 3.000], mean observation: 0.036 [-0.735, 1.389], loss: 5.643730, mean_absolute_error: 25.839596, mean_q: 33.159771
+     28899/100000: episode: 54, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: -97.977, mean reward: -0.098 [-21.905, 20.914], mean action: 1.681 [0.000, 3.000], mean observation: 0.089 [-0.428, 1.411], loss: 5.554397, mean_absolute_error: 25.886129, mean_q: 33.207840
+     29899/100000: episode: 55, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 64.770, mean reward: 0.065 [-24.557, 23.468], mean action: 1.573 [0.000, 3.000], mean observation: 0.076 [-0.820, 1.398], loss: 4.763743, mean_absolute_error: 25.699661, mean_q: 32.925022
+     30899/100000: episode: 56, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 46.098, mean reward: 0.046 [-24.222, 23.515], mean action: 1.676 [0.000, 3.000], mean observation: 0.100 [-0.850, 1.501], loss: 5.559831, mean_absolute_error: 25.943083, mean_q: 33.429527
+     31394/100000: episode: 57, duration: 8.245s, episode steps: 495, steps per second: 60, episode reward: -295.099, mean reward: -0.596 [-100.000, 26.963], mean action: 1.717 [0.000, 3.000], mean observation: 0.112 [-0.578, 2.047], loss: 5.847774, mean_absolute_error: 25.885002, mean_q: 33.297169
+     32394/100000: episode: 58, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 8.668, mean reward: 0.009 [-23.783, 23.933], mean action: 1.523 [0.000, 3.000], mean observation: 0.105 [-0.914, 1.404], loss: 4.892217, mean_absolute_error: 26.149612, mean_q: 33.990734
+     33105/100000: episode: 59, duration: 11.844s, episode steps: 711, steps per second: 60, episode reward: -376.669, mean reward: -0.530 [-100.000, 24.825], mean action: 1.678 [0.000, 3.000], mean observation: 0.089 [-0.834, 2.268], loss: 5.600690, mean_absolute_error: 25.941223, mean_q: 33.725380
+     34105/100000: episode: 60, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: -2.080, mean reward: -0.002 [-22.445, 26.402], mean action: 1.576 [0.000, 3.000], mean observation: 0.099 [-0.850, 1.394], loss: 6.406185, mean_absolute_error: 26.175575, mean_q: 33.600700
+     34217/100000: episode: 61, duration: 1.863s, episode steps: 112, steps per second: 60, episode reward: -54.512, mean reward: -0.487 [-100.000, 11.542], mean action: 1.652 [0.000, 3.000], mean observation: 0.140 [-3.105, 1.511], loss: 4.938280, mean_absolute_error: 26.180136, mean_q: 33.286892
+     34284/100000: episode: 62, duration: 1.116s, episode steps: 67, steps per second: 60, episode reward: -55.049, mean reward: -0.822 [-100.000, 14.056], mean action: 1.582 [0.000, 3.000], mean observation: 0.076 [-3.406, 1.391], loss: 4.845339, mean_absolute_error: 25.840225, mean_q: 32.846687
+     34359/100000: episode: 63, duration: 1.247s, episode steps: 75, steps per second: 60, episode reward: -46.344, mean reward: -0.618 [-100.000, 13.330], mean action: 1.320 [0.000, 3.000], mean observation: 0.023 [-3.450, 1.388], loss: 5.489666, mean_absolute_error: 25.645338, mean_q: 32.770229
+     35359/100000: episode: 64, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: -51.710, mean reward: -0.052 [-24.306, 42.255], mean action: 2.023 [0.000, 3.000], mean observation: 0.020 [-0.892, 1.406], loss: 6.586056, mean_absolute_error: 26.250708, mean_q: 33.616550
+     36359/100000: episode: 65, duration: 16.658s, episode steps: 1000, steps per second: 60, episode reward: 94.115, mean reward: 0.094 [-21.950, 23.088], mean action: 1.462 [0.000, 3.000], mean observation: 0.089 [-0.636, 1.396], loss: 5.425662, mean_absolute_error: 26.324171, mean_q: 33.844593
+     37359/100000: episode: 66, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: -4.999, mean reward: -0.005 [-21.268, 21.558], mean action: 1.571 [0.000, 3.000], mean observation: 0.066 [-0.758, 1.395], loss: 5.536623, mean_absolute_error: 26.543245, mean_q: 33.950203
+     38359/100000: episode: 67, duration: 16.658s, episode steps: 1000, steps per second: 60, episode reward: 43.854, mean reward: 0.044 [-22.019, 21.937], mean action: 1.681 [0.000, 3.000], mean observation: 0.070 [-0.876, 1.453], loss: 5.638529, mean_absolute_error: 26.968773, mean_q: 34.631462
+     39359/100000: episode: 68, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 86.125, mean reward: 0.086 [-23.992, 23.039], mean action: 1.537 [0.000, 3.000], mean observation: 0.111 [-0.783, 1.390], loss: 4.654829, mean_absolute_error: 26.855883, mean_q: 34.528896
+     40359/100000: episode: 69, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 7.571, mean reward: 0.008 [-19.911, 22.984], mean action: 1.607 [0.000, 3.000], mean observation: 0.085 [-0.812, 1.397], loss: 5.182097, mean_absolute_error: 26.975548, mean_q: 34.970703
+     41359/100000: episode: 70, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 138.902, mean reward: 0.139 [-18.978, 13.006], mean action: 0.952 [0.000, 3.000], mean observation: 0.153 [-0.816, 1.386], loss: 4.911070, mean_absolute_error: 27.334597, mean_q: 35.465370
+     42359/100000: episode: 71, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 127.771, mean reward: 0.128 [-20.143, 23.617], mean action: 1.507 [0.000, 3.000], mean observation: 0.105 [-0.805, 1.432], loss: 4.977643, mean_absolute_error: 27.585964, mean_q: 36.186493
+     43359/100000: episode: 72, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 121.975, mean reward: 0.122 [-18.964, 23.555], mean action: 1.365 [0.000, 3.000], mean observation: 0.146 [-0.844, 1.412], loss: 5.296569, mean_absolute_error: 27.461039, mean_q: 36.102757
+     44359/100000: episode: 73, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 124.048, mean reward: 0.124 [-17.653, 19.184], mean action: 0.938 [0.000, 3.000], mean observation: 0.144 [-0.813, 1.426], loss: 5.325131, mean_absolute_error: 27.628500, mean_q: 36.485062
+     45359/100000: episode: 74, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 37.927, mean reward: 0.038 [-19.311, 19.908], mean action: 2.128 [0.000, 3.000], mean observation: 0.164 [-0.625, 1.403], loss: 4.289262, mean_absolute_error: 27.687418, mean_q: 36.780697
+     46359/100000: episode: 75, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 148.754, mean reward: 0.149 [-24.237, 22.421], mean action: 1.271 [0.000, 3.000], mean observation: 0.173 [-0.693, 1.412], loss: 4.214311, mean_absolute_error: 28.329359, mean_q: 37.607319
+     47359/100000: episode: 76, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 105.364, mean reward: 0.105 [-20.606, 22.809], mean action: 1.333 [0.000, 3.000], mean observation: 0.170 [-0.543, 1.418], loss: 5.317041, mean_absolute_error: 28.540159, mean_q: 37.908363
+     47604/100000: episode: 77, duration: 4.079s, episode steps: 245, steps per second: 60, episode reward: -48.526, mean reward: -0.198 [-100.000, 16.631], mean action: 1.735 [0.000, 3.000], mean observation: -0.044 [-0.866, 1.409], loss: 5.524661, mean_absolute_error: 28.900446, mean_q: 38.371307
+     48604/100000: episode: 78, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 99.924, mean reward: 0.100 [-21.228, 20.595], mean action: 1.256 [0.000, 3.000], mean observation: 0.124 [-0.783, 1.394], loss: 4.266428, mean_absolute_error: 28.876997, mean_q: 38.338993
+     49604/100000: episode: 79, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: -25.810, mean reward: -0.026 [-24.065, 21.647], mean action: 1.358 [0.000, 3.000], mean observation: 0.129 [-0.937, 1.401], loss: 5.769055, mean_absolute_error: 29.004690, mean_q: 38.522072
+     50604/100000: episode: 80, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 109.647, mean reward: 0.110 [-19.283, 23.062], mean action: 1.365 [0.000, 3.000], mean observation: 0.176 [-0.551, 1.411], loss: 4.445239, mean_absolute_error: 29.141756, mean_q: 38.919651
+     51604/100000: episode: 81, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 122.734, mean reward: 0.123 [-18.981, 21.784], mean action: 1.412 [0.000, 3.000], mean observation: 0.149 [-0.722, 1.399], loss: 4.839210, mean_absolute_error: 28.518379, mean_q: 38.022011
+     52604/100000: episode: 82, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 134.527, mean reward: 0.135 [-20.403, 22.367], mean action: 1.444 [0.000, 3.000], mean observation: 0.152 [-0.795, 1.405], loss: 4.181297, mean_absolute_error: 27.726768, mean_q: 37.090393
+     53604/100000: episode: 83, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 131.825, mean reward: 0.132 [-18.724, 23.505], mean action: 1.291 [0.000, 3.000], mean observation: 0.146 [-1.328, 1.473], loss: 3.741710, mean_absolute_error: 27.135237, mean_q: 36.378647
+     54604/100000: episode: 84, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 119.498, mean reward: 0.119 [-22.806, 22.966], mean action: 1.373 [0.000, 3.000], mean observation: 0.177 [-0.473, 1.412], loss: 4.169320, mean_absolute_error: 26.747206, mean_q: 35.857540
+     55604/100000: episode: 85, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: 122.206, mean reward: 0.122 [-23.264, 27.206], mean action: 1.331 [0.000, 3.000], mean observation: 0.150 [-0.734, 1.393], loss: 3.774363, mean_absolute_error: 26.332726, mean_q: 35.473080
+     56604/100000: episode: 86, duration: 16.658s, episode steps: 1000, steps per second: 60, episode reward: 103.332, mean reward: 0.103 [-18.703, 22.348], mean action: 1.261 [0.000, 3.000], mean observation: 0.150 [-0.788, 1.424], loss: 2.963668, mean_absolute_error: 26.109110, mean_q: 35.212311
+     56822/100000: episode: 87, duration: 3.629s, episode steps: 218, steps per second: 60, episode reward: -12.945, mean reward: -0.059 [-100.000, 12.595], mean action: 1.780 [0.000, 3.000], mean observation: -0.025 [-0.672, 1.458], loss: 2.143945, mean_absolute_error: 26.161505, mean_q: 35.248051
+     57822/100000: episode: 88, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: 127.660, mean reward: 0.128 [-19.222, 23.132], mean action: 1.372 [0.000, 3.000], mean observation: 0.206 [-0.722, 1.408], loss: 3.273872, mean_absolute_error: 25.920786, mean_q: 34.889374
+     58822/100000: episode: 89, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 122.445, mean reward: 0.122 [-20.882, 22.534], mean action: 1.312 [0.000, 3.000], mean observation: 0.207 [-0.874, 1.481], loss: 2.864832, mean_absolute_error: 25.644400, mean_q: 34.379292
+     59822/100000: episode: 90, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 119.359, mean reward: 0.119 [-19.879, 22.972], mean action: 1.319 [0.000, 3.000], mean observation: 0.186 [-0.890, 1.401], loss: 2.854200, mean_absolute_error: 25.678169, mean_q: 34.505730
+     60822/100000: episode: 91, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 128.827, mean reward: 0.129 [-23.005, 23.236], mean action: 1.344 [0.000, 3.000], mean observation: 0.201 [-0.844, 1.449], loss: 3.064246, mean_absolute_error: 25.693203, mean_q: 34.494892
+     61822/100000: episode: 92, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 147.146, mean reward: 0.147 [-20.219, 22.629], mean action: 1.457 [0.000, 3.000], mean observation: 0.183 [-0.672, 1.524], loss: 2.264396, mean_absolute_error: 25.705605, mean_q: 34.650852
+     61955/100000: episode: 93, duration: 2.213s, episode steps: 133, steps per second: 60, episode reward: -28.010, mean reward: -0.211 [-100.000, 18.684], mean action: 1.669 [0.000, 3.000], mean observation: -0.016 [-1.206, 1.440], loss: 1.731511, mean_absolute_error: 25.845264, mean_q: 34.878193
+     62955/100000: episode: 94, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 93.651, mean reward: 0.094 [-20.310, 21.181], mean action: 1.256 [0.000, 3.000], mean observation: 0.210 [-0.785, 1.407], loss: 3.000490, mean_absolute_error: 26.275085, mean_q: 35.455402
+     63955/100000: episode: 95, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 140.306, mean reward: 0.140 [-23.925, 25.628], mean action: 1.316 [0.000, 3.000], mean observation: 0.218 [-0.873, 1.398], loss: 2.913350, mean_absolute_error: 25.896917, mean_q: 34.811859
+     64087/100000: episode: 96, duration: 2.196s, episode steps: 132, steps per second: 60, episode reward: -21.398, mean reward: -0.162 [-100.000, 100.809], mean action: 1.477 [0.000, 3.000], mean observation: 0.137 [-2.331, 1.802], loss: 3.847539, mean_absolute_error: 25.393742, mean_q: 34.080898
+     64222/100000: episode: 97, duration: 2.248s, episode steps: 135, steps per second: 60, episode reward: 7.750, mean reward: 0.057 [-100.000, 12.290], mean action: 1.852 [0.000, 3.000], mean observation: -0.016 [-0.768, 1.398], loss: 2.838344, mean_absolute_error: 26.124977, mean_q: 35.159504
+     64326/100000: episode: 98, duration: 1.732s, episode steps: 104, steps per second: 60, episode reward: 25.584, mean reward: 0.246 [-100.000, 14.690], mean action: 1.904 [0.000, 3.000], mean observation: 0.015 [-0.838, 1.391], loss: 1.858448, mean_absolute_error: 25.922527, mean_q: 34.613304
+     65326/100000: episode: 99, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 132.016, mean reward: 0.132 [-21.153, 23.180], mean action: 1.283 [0.000, 3.000], mean observation: 0.210 [-0.632, 1.395], loss: 3.510986, mean_absolute_error: 26.181780, mean_q: 35.218563
+     66326/100000: episode: 100, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 92.611, mean reward: 0.093 [-20.701, 24.031], mean action: 1.360 [0.000, 3.000], mean observation: 0.186 [-0.794, 1.405], loss: 2.962285, mean_absolute_error: 26.089989, mean_q: 35.024734
+     66470/100000: episode: 101, duration: 2.396s, episode steps: 144, steps per second: 60, episode reward: 20.819, mean reward: 0.145 [-100.000, 18.351], mean action: 1.674 [0.000, 3.000], mean observation: -0.012 [-0.987, 1.447], loss: 4.207757, mean_absolute_error: 26.037758, mean_q: 34.694290
+     66795/100000: episode: 102, duration: 5.414s, episode steps: 325, steps per second: 60, episode reward: -0.362, mean reward: -0.001 [-100.000, 13.552], mean action: 1.677 [0.000, 3.000], mean observation: 0.116 [-0.765, 1.388], loss: 3.773540, mean_absolute_error: 26.040503, mean_q: 34.828671
+     67795/100000: episode: 103, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: -14.169, mean reward: -0.014 [-19.483, 24.166], mean action: 1.388 [0.000, 3.000], mean observation: 0.142 [-0.693, 1.402], loss: 4.846238, mean_absolute_error: 25.989016, mean_q: 34.928818
+     67917/100000: episode: 104, duration: 2.029s, episode steps: 122, steps per second: 60, episode reward: -130.454, mean reward: -1.069 [-100.000, 6.376], mean action: 1.115 [0.000, 3.000], mean observation: 0.169 [-1.504, 6.219], loss: 9.845884, mean_absolute_error: 26.474388, mean_q: 35.806076
+     68211/100000: episode: 105, duration: 4.897s, episode steps: 294, steps per second: 60, episode reward: -140.615, mean reward: -0.478 [-100.000, 6.185], mean action: 1.456 [0.000, 3.000], mean observation: 0.157 [-0.985, 3.316], loss: 5.578608, mean_absolute_error: 26.549202, mean_q: 35.813759
+     69211/100000: episode: 106, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: 48.536, mean reward: 0.049 [-19.411, 22.312], mean action: 1.509 [0.000, 3.000], mean observation: 0.182 [-0.828, 1.428], loss: 4.510567, mean_absolute_error: 26.770435, mean_q: 35.854477
+     70211/100000: episode: 107, duration: 16.676s, episode steps: 1000, steps per second: 60, episode reward: 109.239, mean reward: 0.109 [-21.053, 23.661], mean action: 1.353 [0.000, 3.000], mean observation: 0.198 [-0.922, 1.408], loss: 4.799852, mean_absolute_error: 26.880308, mean_q: 36.087574
+     70314/100000: episode: 108, duration: 1.712s, episode steps: 103, steps per second: 60, episode reward: -52.637, mean reward: -0.511 [-100.000, 10.529], mean action: 1.155 [0.000, 3.000], mean observation: -0.080 [-0.919, 2.805], loss: 3.259638, mean_absolute_error: 27.764938, mean_q: 37.428635
+     71314/100000: episode: 109, duration: 16.713s, episode steps: 1000, steps per second: 60, episode reward: 158.124, mean reward: 0.158 [-21.639, 23.178], mean action: 1.273 [0.000, 3.000], mean observation: 0.202 [-0.636, 1.408], loss: 3.565037, mean_absolute_error: 27.279211, mean_q: 36.611172
+     72314/100000: episode: 110, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 162.600, mean reward: 0.163 [-22.590, 22.570], mean action: 1.388 [0.000, 3.000], mean observation: 0.227 [-0.610, 1.389], loss: 4.038869, mean_absolute_error: 27.308586, mean_q: 36.595741
+     73314/100000: episode: 111, duration: 16.725s, episode steps: 1000, steps per second: 60, episode reward: 149.119, mean reward: 0.149 [-19.207, 23.167], mean action: 1.360 [0.000, 3.000], mean observation: 0.171 [-0.847, 1.392], loss: 3.333226, mean_absolute_error: 27.510780, mean_q: 36.949051
+     74314/100000: episode: 112, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: -20.903, mean reward: -0.021 [-18.261, 22.860], mean action: 1.387 [0.000, 3.000], mean observation: 0.131 [-0.821, 1.408], loss: 4.813325, mean_absolute_error: 27.668802, mean_q: 37.122822
+     74614/100000: episode: 113, duration: 4.994s, episode steps: 300, steps per second: 60, episode reward: -183.817, mean reward: -0.613 [-100.000, 17.497], mean action: 1.837 [0.000, 3.000], mean observation: -0.026 [-1.004, 1.388], loss: 5.179921, mean_absolute_error: 27.505299, mean_q: 36.810917
+     75614/100000: episode: 114, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 166.139, mean reward: 0.166 [-20.338, 23.298], mean action: 1.314 [0.000, 3.000], mean observation: 0.202 [-0.650, 1.389], loss: 4.260017, mean_absolute_error: 27.394901, mean_q: 36.740589
+     76614/100000: episode: 115, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 92.361, mean reward: 0.092 [-19.770, 24.406], mean action: 1.449 [0.000, 3.000], mean observation: 0.111 [-0.672, 1.409], loss: 3.293415, mean_absolute_error: 27.301422, mean_q: 36.612587
+     77614/100000: episode: 116, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 74.997, mean reward: 0.075 [-20.172, 15.378], mean action: 1.450 [0.000, 3.000], mean observation: 0.103 [-0.773, 1.388], loss: 4.288029, mean_absolute_error: 26.824114, mean_q: 35.942822
+     78614/100000: episode: 117, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 123.542, mean reward: 0.124 [-19.811, 22.666], mean action: 1.338 [0.000, 3.000], mean observation: 0.219 [-0.752, 1.404], loss: 3.666007, mean_absolute_error: 26.832844, mean_q: 35.929680
+     79614/100000: episode: 118, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 70.519, mean reward: 0.071 [-24.961, 24.030], mean action: 1.691 [0.000, 3.000], mean observation: 0.116 [-0.813, 1.407], loss: 4.323346, mean_absolute_error: 26.920977, mean_q: 36.089993
+     80614/100000: episode: 119, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 18.221, mean reward: 0.018 [-22.675, 23.200], mean action: 1.587 [0.000, 3.000], mean observation: 0.158 [-0.819, 1.406], loss: 2.652262, mean_absolute_error: 26.738546, mean_q: 35.761826
+     80811/100000: episode: 120, duration: 3.280s, episode steps: 197, steps per second: 60, episode reward: -57.225, mean reward: -0.290 [-100.000, 24.676], mean action: 1.797 [0.000, 3.000], mean observation: -0.094 [-0.947, 1.417], loss: 6.106071, mean_absolute_error: 26.979883, mean_q: 36.006111
+     81811/100000: episode: 121, duration: 16.662s, episode steps: 1000, steps per second: 60, episode reward: 140.394, mean reward: 0.140 [-19.881, 23.324], mean action: 1.272 [0.000, 3.000], mean observation: 0.204 [-0.829, 1.394], loss: 2.625253, mean_absolute_error: 26.692602, mean_q: 35.642124
+     82811/100000: episode: 122, duration: 16.658s, episode steps: 1000, steps per second: 60, episode reward: 87.780, mean reward: 0.088 [-21.153, 22.800], mean action: 1.342 [0.000, 3.000], mean observation: 0.217 [-0.868, 1.402], loss: 4.055915, mean_absolute_error: 26.670671, mean_q: 35.785904
+     83811/100000: episode: 123, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 127.960, mean reward: 0.128 [-23.171, 23.224], mean action: 1.309 [0.000, 3.000], mean observation: 0.170 [-0.796, 1.413], loss: 3.494608, mean_absolute_error: 26.255259, mean_q: 35.259674
+     84811/100000: episode: 124, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 116.075, mean reward: 0.116 [-19.884, 22.546], mean action: 1.624 [0.000, 3.000], mean observation: 0.180 [-0.882, 1.413], loss: 3.474026, mean_absolute_error: 26.554499, mean_q: 35.821644
+     85811/100000: episode: 125, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 117.868, mean reward: 0.118 [-23.702, 23.892], mean action: 1.294 [0.000, 3.000], mean observation: 0.178 [-0.801, 1.413], loss: 3.070939, mean_absolute_error: 26.324848, mean_q: 35.592049
+     86811/100000: episode: 126, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 154.583, mean reward: 0.155 [-19.932, 23.301], mean action: 1.344 [0.000, 3.000], mean observation: 0.200 [-0.940, 1.386], loss: 3.530678, mean_absolute_error: 26.133657, mean_q: 35.266998
+     87811/100000: episode: 127, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 104.810, mean reward: 0.105 [-20.654, 22.963], mean action: 1.253 [0.000, 3.000], mean observation: 0.215 [-0.860, 1.409], loss: 2.890764, mean_absolute_error: 26.072487, mean_q: 35.305332
+     88811/100000: episode: 128, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 144.467, mean reward: 0.144 [-22.042, 22.823], mean action: 1.343 [0.000, 3.000], mean observation: 0.171 [-0.776, 1.395], loss: 3.317441, mean_absolute_error: 26.294716, mean_q: 35.538486
+     89811/100000: episode: 129, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 134.625, mean reward: 0.135 [-20.910, 22.966], mean action: 1.333 [0.000, 3.000], mean observation: 0.211 [-0.824, 1.396], loss: 3.250425, mean_absolute_error: 25.882013, mean_q: 35.004242
+     90811/100000: episode: 130, duration: 16.655s, episode steps: 1000, steps per second: 60, episode reward: 147.125, mean reward: 0.147 [-24.186, 26.339], mean action: 1.310 [0.000, 3.000], mean observation: 0.196 [-0.834, 1.389], loss: 3.814436, mean_absolute_error: 25.690329, mean_q: 34.724953
+     90958/100000: episode: 131, duration: 2.447s, episode steps: 147, steps per second: 60, episode reward: -3.548, mean reward: -0.024 [-100.000, 13.998], mean action: 1.660 [0.000, 3.000], mean observation: -0.048 [-0.893, 2.203], loss: 3.090667, mean_absolute_error: 25.529785, mean_q: 34.591171
+     91958/100000: episode: 132, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 2.125, mean reward: 0.002 [-21.217, 20.872], mean action: 1.754 [0.000, 3.000], mean observation: 0.040 [-0.783, 1.411], loss: 3.370347, mean_absolute_error: 25.717419, mean_q: 34.797367
+     92958/100000: episode: 133, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 162.347, mean reward: 0.162 [-20.321, 23.042], mean action: 1.323 [0.000, 3.000], mean observation: 0.171 [-1.006, 1.419], loss: 2.659036, mean_absolute_error: 25.483864, mean_q: 34.463032
+     93079/100000: episode: 134, duration: 2.014s, episode steps: 121, steps per second: 60, episode reward: 8.948, mean reward: 0.074 [-100.000, 19.954], mean action: 1.521 [0.000, 3.000], mean observation: -0.031 [-1.146, 1.848], loss: 6.992815, mean_absolute_error: 25.507553, mean_q: 34.559616
+     94079/100000: episode: 135, duration: 16.661s, episode steps: 1000, steps per second: 60, episode reward: 68.834, mean reward: 0.069 [-21.557, 21.548], mean action: 1.603 [0.000, 3.000], mean observation: 0.150 [-0.684, 1.470], loss: 3.243470, mean_absolute_error: 25.174566, mean_q: 34.099037
+     95079/100000: episode: 136, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 145.230, mean reward: 0.145 [-22.038, 24.887], mean action: 1.513 [0.000, 3.000], mean observation: 0.248 [-0.832, 1.399], loss: 3.077813, mean_absolute_error: 25.480192, mean_q: 34.571125
+     96079/100000: episode: 137, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 175.697, mean reward: 0.176 [-20.899, 23.113], mean action: 1.432 [0.000, 3.000], mean observation: 0.221 [-0.810, 1.386], loss: 2.914372, mean_absolute_error: 25.530859, mean_q: 34.514633
+     97079/100000: episode: 138, duration: 16.659s, episode steps: 1000, steps per second: 60, episode reward: 142.519, mean reward: 0.143 [-21.448, 23.079], mean action: 1.278 [0.000, 3.000], mean observation: 0.208 [-0.738, 1.396], loss: 3.298617, mean_absolute_error: 25.254799, mean_q: 34.097908
+     98079/100000: episode: 139, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 67.716, mean reward: 0.068 [-22.324, 15.815], mean action: 1.158 [0.000, 3.000], mean observation: 0.245 [-0.818, 1.408], loss: 2.818408, mean_absolute_error: 24.926094, mean_q: 33.756969
+     99079/100000: episode: 140, duration: 16.660s, episode steps: 1000, steps per second: 60, episode reward: 134.850, mean reward: 0.135 [-19.337, 12.793], mean action: 1.313 [0.000, 3.000], mean observation: 0.210 [-0.826, 1.400], loss: 2.627020, mean_absolute_error: 25.019989, mean_q: 33.823093
+    done, took 1670.427 seconds
+    Testing for 50 episodes ...
+    Episode 1: reward: -35.510, steps: 1000
+    Episode 2: reward: -49.878, steps: 1000
+    Episode 3: reward: -66.549, steps: 1000
+    Episode 4: reward: -31.878, steps: 1000
+    Episode 5: reward: -178.368, steps: 179
+    Episode 6: reward: -119.470, steps: 503
+    Episode 7: reward: 267.405, steps: 283
+    Episode 8: reward: 272.480, steps: 199
+    Episode 9: reward: 253.779, steps: 196
+    Episode 10: reward: 264.270, steps: 208
+    Episode 11: reward: 285.816, steps: 203
+    Episode 12: reward: -73.686, steps: 1000
+    Episode 13: reward: 222.774, steps: 339
+    Episode 14: reward: 131.677, steps: 1000
+    Episode 15: reward: 22.814, steps: 232
+    Episode 16: reward: -57.814, steps: 1000
+    Episode 17: reward: 277.594, steps: 225
+    Episode 18: reward: -53.267, steps: 1000
+    Episode 19: reward: 279.050, steps: 374
+    Episode 20: reward: 265.183, steps: 225
+    Episode 21: reward: -4.332, steps: 1000
+    Episode 22: reward: -82.632, steps: 1000
+    Episode 23: reward: -34.764, steps: 1000
+    Episode 24: reward: 89.821, steps: 867
+    Episode 25: reward: -67.185, steps: 1000
+    Episode 26: reward: 148.518, steps: 377
+    Episode 27: reward: 237.942, steps: 210
+    Episode 28: reward: -36.892, steps: 1000
+    Episode 29: reward: 204.006, steps: 257
+    Episode 30: reward: -20.217, steps: 1000
+    Episode 31: reward: -68.975, steps: 1000
+    Episode 32: reward: 0.849, steps: 1000
+    Episode 33: reward: 253.289, steps: 201
+    Episode 34: reward: 179.975, steps: 283
+    Episode 35: reward: 97.418, steps: 1000
+    Episode 36: reward: 261.379, steps: 209
+    Episode 37: reward: -46.472, steps: 1000
+    Episode 38: reward: 173.219, steps: 1000
+    Episode 39: reward: 74.134, steps: 1000
+    Episode 40: reward: 219.900, steps: 555
+    Episode 41: reward: -19.666, steps: 1000
+    Episode 42: reward: -63.893, steps: 1000
+    Episode 43: reward: 215.647, steps: 227
+    Episode 44: reward: 256.585, steps: 206
+    Episode 45: reward: 200.626, steps: 231
+    Episode 46: reward: 242.783, steps: 212
+    Episode 47: reward: -63.519, steps: 1000
+    Episode 48: reward: 280.491, steps: 382
+    Episode 49: reward: 163.054, steps: 1000
+    Episode 50: reward: 300.206, steps: 321
     
 
 
 
 
-    <keras.callbacks.History at 0x1cab5ad8588>
+    <keras.callbacks.History at 0x16fa9600f28>
 
 
 
-## It is seems to be doing ok, no negative rewards. Now, let's compare the performance of each model, that is, the CNN model and the RL model, and see which one performs better:
+## It is seems to be doing ok, rewards are mostly postive. 
+
+# ------Comparison section------
+## Now, let's compare the performance of each model, that is:
+
+## a) the CNN model trained with a single frame, 
+## b) the CNN model trained with a sequence of frames and 
+## c) the RL model, 
+## and see which one performs better
 
 
 ```python
-def test_cnn_model(path_write):
-    """Test CNN and RL model
-    cnn_model: boolean, if true, CNN model is tested, else, RL is tested
+def test_cnn_model(path_read, path_write, single_frame = True, frames=3):
+    """Test CNN model
+    path_read: string, path to model
+    path_write: string, path to save results in csv format
+    single_frame: boolean, defines whether model trained with a single frame or not
+    frames: int, defines number of frames to be combined to then feed a model (only implemented when single_frame = False)
     
     NOTE: some modifications on the code below have been implemented, as my CNN training required color 
     images because I implemented a transfer learning strategy (the VGG16 network requires an image 
     shape of (widh, height, channels =3))
     """
-    path = "weights/best_weights.hdf5"
+    path = path_read
     
     # Load the Lunar Lander environment
     env = ll.LunarLander()
@@ -685,7 +1397,7 @@ def test_cnn_model(path_write):
     # Load and initialise the contrll model
     ROWS = 84
     COLS = 84
-    CHANNELS = 3 # this set from 1 to 3
+    CHANNELS = 3
     model = keras.models.load_model(path)
 
     total_rewards = []
@@ -697,20 +1409,39 @@ def test_cnn_model(path_write):
         total_reward = 0
         steps = 0
         while True:
-
-            # Access the rednered scrnen image
-            raw_image = env.render(mode='rgb_array')
-            # Prepare the image for presentation to the network
-            processed_image = cv2.resize(raw_image, (ROWS, COLS), interpolation=cv2.INTER_CUBIC)
-            # this now reads color images:
-            processed_image = cv2.cvtColor(processed_image, 1)
+            if not single_frame:
+                # set a placeholder to same combined images
+                combined_frames = np.zeros(shape=(ROWS, COLS), dtype=np.uint8)
+                # read a sequence of frames, combine them and then feed the model with the resulting object
+                for j in range(frames):
+                    # Access the rendered image
+                    raw_image = env.render(mode='rgb_array')
+                    # Prepare the image for presentation to the network
+                    processed_image = cv2.resize(raw_image, (ROWS, COLS), interpolation=cv2.INTER_CUBIC)
+                    # grayscale
+                    processed_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2GRAY)
+                    # combine images to pass on a "sequence"
+                    combined_frames += processed_image
+                # back to three channels
+                processed_image = cv2.cvtColor(combined_frames, cv2.COLOR_GRAY2RGB)
+                # reshape the matrix
+                processed_image = processed_image.reshape((1, ROWS, COLS, 3))
+            
+            # model trained with a single frame
+            else:
+                raw_image = env.render(mode='rgb_array')
+                # Prepare the image for presentation to the network
+                processed_image = cv2.resize(raw_image, (ROWS, COLS), interpolation=cv2.INTER_CUBIC)
+                # this now reads color images:
+                processed_image = cv2.cvtColor(processed_image, 1)
+                # changed the order of reshaping:
+                processed_image = processed_image.reshape((1, ROWS, COLS, CHANNELS))
+                
             processed_image = np.array(processed_image, dtype=np.float)
-            # changed the order of reshaping:
-            processed_image = processed_image.reshape((1, ROWS, COLS, CHANNELS))
-            processed_image = processed_image/255
-
+            #processed_image = processed_image/255
+            
             # Get the model to make a prediction
-            # my model did not have predict_classes, I am using predict and extracting the action manually 
+            # NOTE: my model did not have predict_classes method, I am using predict and extracting the action manually 
             a = model.predict(processed_image)
             a = np.argmax(a)
 
@@ -726,22 +1457,64 @@ def test_cnn_model(path_write):
                     total_rewards.append(total_reward)
                     break
 
-        print("total rewards", total_rewards)
-        print("average total reward", np.mean(total_rewards))
+    print("total rewards", total_rewards)
+    print("average total reward", np.mean(total_rewards))    
 
     # Write total rewards to file
     pd.DataFrame(total_rewards, columns=['total_rewards']).to_csv(path_write, index=False)
 ```
 
+## Test model trained with a single image
+
 
 ```python
-test_cnn_model('csv/total_rewards_cnn.csv')
+test_cnn_model('weights/best_weights.hdf5', 'csv/total_rewards_cnn_single.csv', True)
 ```
-    total rewards [-1383.0444726947976, -145.16366348138553, -377.5259999149343, -95.64336652943265, -94.10508990720191, -468.27238667785053, -224.61374139752314, -381.7989927702085, -364.0190928827014, -589.6562216272889, -173.07809504847995, -179.62829142972834, -335.381383756353, -235.78200773178108, -101.61323189355878, -304.94210886137114, -412.45309798144507, -291.6816726897828, -80.36467142554119, -407.429415051316, -299.70759852729367, -326.5535700432572, -194.89738023556842, -230.0299658668639, -402.73405413281273, -541.8541640946266, -550.6098706221226, -356.60662083088647, -153.01781992604725, -308.1773923441464, -581.7257226946006, -141.86556122625834, -326.00317330050405, -159.52099361814987, -656.4171785117853, -250.72072660041118, -90.84751778918587, -201.58558769644648, -368.93088231479646, -427.39586177156315, -126.6983051141546, -611.8558814908279, -360.95994757675567, -119.61917555408162, -221.2946591982929, -41.164164117808184, -332.2559150033759, -168.73457861794503, -146.32415901027113, -200.28183396036783, -96.81601212362497, -189.8647689805395, -104.15778719826022, -169.61423510200862, -231.15448963106385, -206.61256750825066, -235.34517150234666, -604.8517143018169, -363.4475320462295, -410.1577538155926, -865.1504296724886, -529.7692539334912, -20.987764158564218, -121.70072188209068, -130.13888030683387, -358.04370640872054, -174.11080534650733, -108.11570065987365, -191.70696046938988, -370.056082459524, -231.69659982319024, -446.60274757299766, -114.5734678788237, -349.4045054613392, -299.73023628469696, -354.34740041432383, -163.5245186323383, -262.47982584204465, -394.9267963497943, -111.78078114831854, -127.54526560866674, -170.85346156120323, -96.31906474877385, -319.9803198384028, -334.9793749091564, -515.2038288623535, -7.31449666328659, -361.62936608155087, -143.0594428213106, -340.9090232132841, -389.41604022934916, -244.70060674503134, -917.411530325929, -437.48448055544503, -228.9260497394517, -130.70387197593283, -367.9034056029018, -407.9789663595871, -91.94203052314303, -185.0574080838758, -517.5285883974246, -385.8319697332901, -365.6261673633464, -333.5541931698883, -342.5523265899762, -392.5984890656287, -496.2477722290581, -170.66787281259423, -310.3271838399676, -509.404049112305, -308.42523005205544, -350.8613154416785, -820.2518347021684, -378.9994362395468, -162.40243400432158, -581.3197331914757, -100.89692246438068, -516.9005756588535, -1110.8868192508849, -421.5847589068615, -40.7310909917927, -1476.2387907068432, -351.70739737707385, -372.8090090207729, -525.11109979605, -372.46262818125325, -669.5384111240618, -153.05044803124576, -304.4108292796717, -365.02086202698194, -131.88322374999626, -300.6852904123175, -325.7006961616087, -369.5165106620832, -223.86984133995261, -321.7910246605595, -147.56758118449193, -190.6758977990695, -174.68545427463266, -406.5823076162977, -356.85176342938155, -649.8018949681738, -288.01543644964374, -300.35805402487694, -371.63385035919555, -104.84017483011571, -87.88620619465733, -71.50041303504088, -424.88584003988643, -325.506215806662, -512.2162579106182, -157.34824059289315, -188.80908320757254, -215.35803964675267, -301.8012212466258, -228.18869576708119, -337.15784235160925, -287.7661842806293, -326.43924202544673, -404.7444609906803, -165.0838762494069, -611.7785061642232, -983.4831605850031, -98.98520020811169, -377.3328297689966, -161.97929391849084, -1198.5887532810414, -561.4967355801614, -97.5985947868793, -368.28985934017464, -293.1736272289299, -317.4598608441262, -243.17472419314245, -83.4391621380304, -440.9523294024624, -115.41548552760409, -660.8238998546357, -429.62269439764435, -145.63740731735652, -195.58683594019686, -1031.973777859445, -125.68842727263458, -78.16049315323933, -369.5505891188858, -346.870713483216, -717.1711272231429, -251.9977721568414, -437.6878981901981, -370.1598182320878, -107.62672547452975, -468.2876916001792, -253.54362245376524, -658.6432187289485, -384.00762925313825, -299.78432914267887, -388.14789759861554, -316.92126549110253, -430.10086350181655, -741.9316270176728, -141.81971848835093]
-    average total reward -333.9338387142736
+total rewards [-432.6090971207826, -276.31979341029194, -228.60556016350472, -534.7273672770891, -454.687340245852, -515.6048729300101, -448.48564868086936, -522.7850992306625, -560.9841472655161, -467.70312364964906, -425.84465680678494, -319.239062560099, -260.16188211667526, -461.89562464539017, -253.57448428926364, -628.6395742731584, -417.7215210968503, -413.5150672915387, -331.8664014494749, -88.17405376174585, -319.753046670632, -206.13371735439335, -537.2590020308487, -269.3922766464411, -329.4983070464757, -614.4947874293366, -211.2502697653885, -504.86425384006515, -410.5003978637076, -164.0227903871439, -423.804722062256, -291.5191385047214, -393.53651860134136, -355.27305426340445, -569.3166769108566, -390.6619388310436, -225.18589060104378, -498.22718834555354, -124.53150634666616, -307.2244686571354, -331.1843225931955, -426.23572243955937, -428.85936694464385, -217.6220894203786, -420.05332278549633, -167.85505511265026, -431.3480714597547, -116.98914520401503, -32.093313647411705, -393.5885418011614, -427.95969197013443, -365.0436720300262, -73.93758965394647, -335.6464767249506, -560.936375603065, -337.5379950478367, -163.8248487088174, -513.7341982718469, -245.9569071816554, -475.2329653403455, -150.860014283262, -175.88539744738029, -123.21167526678025, -619.9120755980323, -507.8514413778461, -217.9459179550177, -482.8978497148629, -42.150877804778396, -70.60843617729579, -303.3776734155147, -211.9393240003021, -428.4856561535657, -166.53092023533165, -344.19345301252963, -281.30299930241813, -136.3209685073699, -215.57898389165794, -235.4172959199728, -389.1270050049185, -357.31819128409467, -193.10192803246235, -500.74675420162345, -346.1932957160531, -89.59266692809952, -435.43537960917683, -170.57816540452797, -290.4020680344287, -56.33564726318943, -111.29503446126111, -114.0164690921163, -130.08692320343593, -113.8098723914303, -329.79480578974835, -414.1472295773319, -512.8971279398284, -316.9254867792285, -374.1367820768205, -91.5740688912091, -340.6756446639406, -132.46198101926583, -403.3965474185298, -184.98711051417462, -636.3366059580002, -249.4596611316091, -283.2307971121925, -121.92288936524544, -494.76550476766596, -306.1565692464095, -364.7352709876155, -427.5761281688583, -184.48182114434343, -135.13033698739963, -342.014188443718, -573.209028033854, -117.11198993253973, -418.11274599075585, -507.4271189534813, -482.98007389682886, -135.74730996542803, -265.5091111733666, -396.6444158823268, -329.8713364764919, -156.12125637753795, -381.14351439624585, -500.55989062429865, -459.2274221088924, -502.4355627641799, -129.7375879767825, -80.21112757303234, -454.20023038481696, -282.9750247543717, -440.49426910579524, -103.70917876857456, -425.1763385458294, -226.57913817709624, -404.5503410765095, -132.04432811589453, -380.1484164520429, -430.9156040941767, -357.91184240618566, -178.71422515479236, -498.3632923904251, -638.9024953999126, -28.575456090582165, -236.0478408689775, -268.40462007311726, -463.7900571881453, -288.47958759540165, -392.2387040039112, -321.8143416066706, -147.00052372515216, -667.8713976033283, -419.93572790457614, -204.1741610279904, -332.72856743885933, -452.4590729521794, -513.0799925259149, -401.3033597204611, -405.6185462927823, -51.057043959979126, -208.86094504735797, -218.82184316337484, -606.4310739383496, -344.26543286151957, -433.36070355726264, -345.5436142539036, -237.29373201506462, -304.3431005584295, -306.1297375888864, -311.32776560195566, -214.92534250383156, -413.0834707993016, -290.29141979343467, -204.38491044438592, -161.2412377822168, -319.249399905996, -452.9732921452134, -306.97056742589336, -313.9577987410007, -323.8583239078347, -343.5592105695386, -411.5068659839383, -235.7706654524809, -76.55630631006375, -288.1500082284441, -166.02650525931216, -379.9481308123438, -450.6700400718905, -41.96496392671365, -404.8432596593446, -357.135617804379, -255.6375264679877, -242.36946257353756, -573.8080205605988, -28.571036868809117, -98.05191565308583, -437.0963844306137, -188.12864862514834, -75.75088004349655, -500.45587917100136]
+    average total reward -320.8658958953843
     
 
-## Apparently, it did not do very well.. total average reward of  ~ -333. Now lest's test the RL model:
+## Test model trained with 5 frames, feeding it 2 frames to infer
+
+
+```python
+test_cnn_model('weights/best_weights_mixed.hdf5', 'csv/total_rewards_cnn_multi2.csv', False, 2)
+```
+    total rewards [-162.08104994094793, -347.0167430639781, -425.93484109844997, -300.7208146776069, -127.76996265408833, -399.3803252158449, -173.735575517852, -426.2918444162261, -148.87899975938183, -344.68165477493926, -100.90153118931985, -329.97646494519904, -380.12466595570385, -294.70960534888553, -414.1323589963635, -75.04394710836553, -81.52638715055241, -150.86647584431162, -276.84740645483356, -54.468851978497064, -398.8181031924262, -488.11295882938214, -300.6869559996152, -115.9717615141854, -367.2676139364083, -125.87281245024901, -407.9695697661266, -102.53612201688298, -393.11887134554354, -297.17970725149326, -195.2905837728709, -344.66971850775593, -342.36773207931833, -295.2752787308636, -26.94536624666918, -196.20484786130277, -351.15982139761843, -115.63079682658784, -346.3540260487596, -300.12267933662326, -310.6647961420588, -392.4995989935012, -384.89429150200306, -44.17057534532469, -310.6019865605659, -307.4250693351206, -119.67635023548823, -306.16554833142607, -303.1105018266138, -37.676143959673574, -87.57686152677253, -374.8814296752637, -240.2208325828702, -258.44323532321926, -80.52129619305944, -357.69291438875774, -317.25972421215124, -130.365769460488, -118.18581696155712, -185.21641930073548, -315.96572360453143, -394.60052060292344, -216.8405055241447, -114.6961388549621, -169.9023185593419, -126.69913708637922, -71.58171745442031, -281.735285541816, -214.72441646625322, -439.6995460568129, -441.85605237524476, -341.8316323043879, -330.21447905882917, -122.46984252657103, -241.1805009051206, -320.3672278025844, -247.89806350960424, -99.86003354937829, -369.86559483127775, -281.6788434000725, -227.73961419784848, -330.94541975597724, -181.11231300637968, -331.0375293690381, -97.46313820538383, -217.37527707312304, -385.9857970258704, -258.01405382230905, -115.83275747000324, -121.07754488220735, -356.373051140642, -67.64557689495567, -184.5287655446649, -251.97865965621565, -291.77093996070573, -272.30749434343477, -205.48635791095893, -245.71153655453975, -93.91126428988126, -301.05059125586985, -224.54954652928632, -194.7352642370384, -359.46462719635804, -507.96892246237167, -215.64553920918667, -106.92033475900708, -351.6925855763701, -228.19281464035384, -156.28458689533133, -562.5934850499307, -338.2109490141295, -419.07464706245725, -444.18387607521913, -151.40161737114397, -194.87733243347049, -100.0327583680626, -284.459174157784, -326.1376674853308, -369.60848168364953, -65.30280771229712, -64.80863262021298, -179.8559457057326, -104.20728821609563, -326.8811799929804, -235.5760343370053, -236.9418424165376, -432.06076037945263, -293.37101355167977, -30.736930222028946, -84.08235027703896, -250.67916062273665, -311.82356567579484, -283.3755817655118, -253.66141615959089, -134.35786987879567, -269.93555137890104, -240.97114786107858, -300.20582149704376, -94.77664751930733, -426.1983874498287, -105.7084894397569, -190.84855280956964, -433.90080370873426, -311.08443512276017, -382.6531129726634, -276.0515658206094, -355.8789030298903, -421.53904833937554, -139.51947054340303, -226.6522971793987, -27.124419603507405, -146.47411409471943, -223.7819360504308, -167.28197558131086, -534.6430121181943, -272.76429858297865, -372.4142852140995, -77.08666325460237, -43.562643409149416, -228.68510400413774, -290.14185602698353, -258.29988381215765, -271.0101364934578, -311.19892821288244, -117.96401912466074, -661.9549280526708, -120.43213712922652, -339.6710710304424, -527.9181700682271, -255.68887860700795, -300.53565436162455, -97.32798754306909, -206.71855184187407, -360.6387384122589, -300.81167515766333, -293.67726323317504, -306.751381495867, -238.19084545143724, -494.23370558522566, -226.97013894277984, -166.22225007752786, -276.32602793105895, -305.6929746092103, -426.95161401133635, -287.5388511234378, -343.2224501126882, -390.61522308986247, -86.82334177246487, -457.3954196401042, -367.08264041637796, -289.22934738582444, -314.4893312860553, -97.27198979291782, -15.688509855175894, -243.32774771858868, -310.1392758870587, -319.0295276202232, -125.2337485830899, -320.2326687428157, -131.88553944490334]
+    average total reward -256.11471481721094
+    
+
+## Test model trained with 5 frames, feeding it 3 frames to infer
+
+
+```python
+test_cnn_model('weights/best_weights_mixed.hdf5', 'csv/total_rewards_cnn_multi3.csv', False, 3)
+```
+ total rewards [-236.25774090906194, -150.63847308225567, -179.2893543550918, -361.472014600461, -86.64469153344197, -418.70024181274516, -101.96404964368065, -124.73216378638156, -317.51590513743145, -92.94372031861366, -213.53073923878355, -188.27931076587896, -256.1711223247798, -517.8387012034516, -133.7839372779674, -283.73101302324, -335.0605047037911, -470.09120400859587, -205.33843543812446, -371.0924002110839, -98.69134044805682, -60.92851817231451, -434.8465020383911, -132.08504263429722, -577.3084358733734, -404.3154231065686, -495.2934808420189, -121.25468846243272, -489.3952252264382, -172.8651457292313, -450.406554982822, -246.6339416296874, -470.56141858825765, -139.7320967040848, -396.939217751614, -2.4433459412023524, -291.57366120504287, -335.6717102799015, -484.99289503442685, -340.97884635979784, -359.3433306654789, -345.12528149637046, -333.62263540299244, -71.12686843006533, -74.35411884537395, -295.5511144362151, -115.18295595648671, -351.99357948387, -271.9675601216969, -643.4919322650458, -398.12545930790117, -104.38525018745756, -399.79366796400075, -542.5257111315834, -260.1227560391111, -295.0307726402239, -262.7979789372732, -349.1872382108654, -156.088041975526, -108.82389243685014, -570.027621476301, -422.8174846493167, -96.84098433713226, -373.2011878471819, -353.9260823896566, -386.5315574408144, -403.60096144331465, -120.231775564038, -135.6089121218826, -405.878670502449, -509.16507565341726, -318.99474488896215, -302.15520233146697, -272.534173383468, -355.8079217171072, -327.5231012883588, -386.86374841714894, -397.0072244364995, -356.5099364055228, -146.85236397751015, -463.9167419312441, -306.9989318637398, -323.80867834968404, -87.37276511740417, -88.86079657192201, -532.4199450707645, -607.9803315445614, -284.73625041130674, -278.83402691399954, -424.214232032017, -356.9506897270653, -333.06917338665676, -275.24099359150625, -288.55927240742153, -322.4469969202187, -410.2258240599548, -422.82506862357644, -294.9146585296759, -302.7574536061311, -482.7515948934809, -340.1151184028232, -302.9528170377695, -368.02524724390145, -195.57085493517096, -450.8890920156341, -278.9990617510694, -110.28741883244832, -456.73257173994494, -290.536926332225, -273.1914514217528, -354.8894215659237, -364.6300056004327, -352.41769892146004, -238.67977099158605, -343.8470847249241, -75.65834762770848, -251.63783559914864, -397.1646242632701, -317.63207517778267, -286.12397087444424, -259.6368662121123, -504.3762263887045, -153.979334708392, -317.0000829071895, -248.08229379431413, -195.8512229809841, -382.5588605434374, -299.0469660518437, -299.54561741057887, -235.48670179076765, -253.5931688500046, -277.8387478235539, -217.99105137976883, -202.85725852667775, -112.16659044072975, -270.6702659565656, -411.59276492679396, -246.99866739274427, -115.14025516166694, -187.92706651793043, -307.1215147825554, -40.76535734345694, -324.6892355013458, -382.4590438136987, -218.07313724972548, -387.53212389424715, -384.367154361585, -223.662555863939, -306.34014541481883, -379.27679140410675, -301.0259332830502, -333.78825440056613, -580.4822993155744, -242.9411211521381, -400.4373354708877, -400.64671177856576, -407.9064651584296, -244.212790577551, -355.43539789137765, -452.56252495504083, -69.12003847556727, -355.97355977019504, -481.85730836343396, -268.52906242479946, -355.2823685182306, -71.41251773901665, -345.66882465126866, -358.95128895138805, -382.8256440402241, -380.6086245445328, -228.6032724676046, -310.1048762620407, -297.00792080582687, -187.12472599827805, -122.60591256955679, -72.72820628286794, -140.5791213099594, -421.87595670641304, -150.1550175333488, -325.1908298424431, -341.3581311579419, -465.7326792507271, -345.35354472167523, -513.1392019452089, -93.24689609023167, -492.72066312637855, -83.31532102286982, -276.00990807441787, -297.1653778280182, -342.790781740978, -396.66634913208884, -462.80710420181305, -379.4863779944553, -374.03529153190783, -338.97414903365484, -266.38851961395085, -321.529967881626, -311.3137924818837, -304.59956005719926, -181.27600344311486]
+    average total reward -301.4587925608353
+    
+
+## Test model trained with 5 frames, feeding it 4 frames to infer 
+
+
+```python
+test_cnn_model('weights/best_weights_mixed.hdf5', 'csv/total_rewards_cnn_multi4.csv', False, 4)
+```
+    total rewards [-243.15936568063796, -213.37505801582842, -414.73463072695114, -351.73379180038586, -361.8103732713146, -329.2486115767073, -403.09634900068, -326.91055525660215, -617.6790340254427, -7.6417432213786185, -173.47273216359588, -194.9971993225172, -409.53026006987585, -140.87048860366374, -111.08379903982271, -312.5033412476075, -550.4931923574994, -328.6905417820863, -279.05987499235295, -367.52286246410887, -269.49238911088054, -344.3039989663487, -502.97612150703264, -135.91466069124192, -307.7559600610389, -217.6025830048458, -286.94298776822245, -392.58133351001777, -203.4124732398379, -551.6036283580946, -336.74159249165905, -268.4758157639375, -393.0568935809911, -110.08829285806337, -357.7502514058911, -445.8355594500486, -183.68658337022885, -272.918827852636, -322.6026357490552, -254.09746242196033, -309.83312244849697, -148.984729753983, -114.53862974316523, -209.97416805374166, -254.20283288053741, -129.23260766566636, -127.89326856905708, -340.0316087200377, -467.18806912513764, -338.34033465172195, -49.82414903943744, -206.79468828089787, -403.3079027946672, -250.5943259551947, -218.08245390122943, -133.02946847029133, -511.51652814796074, -422.2322697587353, -505.0668356957642, -130.4792570479373, -261.20859749036816, -279.14324810597486, -161.32218977312587, -445.41937840859435, -102.91847467213532, -425.33018821815614, -278.8850894962071, -279.9463245893651, -147.24764723144278, -126.06690384085262, -196.84276057960724, -134.44820406280823, -240.67295889084733, -170.34865194912376, -286.52229333944916, -502.7750402116966, -157.43306316021005, -205.57579529185767, -362.16039101943414, -150.8616367051223, -120.71344591443915, -426.4812120447995, -270.61788337327744, -268.5612044784241, -312.9077976708502, -375.23878146838547, -241.95637108187032, -43.21243078422902, -394.3310057934733, -210.18745266335395, -424.6217641783188, -177.8456040430945, -273.09431781719337, -375.363263827876, -7.992025983739154, -559.8547601091554, -369.7138100033143, -150.30379516221063, -240.72281782452004, -443.58942970394855, -146.52728763236007, -237.01988405133466, -185.02675509684843, -366.7162904282793, -437.867021544129, -190.95760188725754, -348.79477719630347, -303.98612940861824, -293.9016173348063, -260.48086682050393, -610.7008332962756, -311.65916050930616, -613.6862318755465, -411.57538761173004, -538.4945615853226, -467.95980831063224, -284.1417214949279, -313.575091153745, -405.96328633251727, -544.1162819918004, -244.74767264200557, -153.99971816111918, -468.9517498103982, -282.97273002888363, -73.55838864705001, -440.79599229627837, -264.022341117102, -517.2865221961525, -212.709219140726, -96.57260026846711, -337.22523904216075, -163.56392114984993, -137.62436325283312, -310.8837515283018, -212.91256406530616, -333.14556702063516, -224.42659744740888, -57.33539583885468, -175.06771857639643, -369.1126911436478, -139.4802932671269, -52.989127677008, -169.9094359680938, -420.0868202115816, -189.37232167185653, -352.19166072216285, -179.45548261927647, -303.6821649042553, -268.3003652097509, -339.90286821876896, -136.66524191106123, -186.22192089859027, -194.67892735278582, -251.2111047904745, -148.82930667138945, -70.57917058322789, -287.39780734453234, -398.69376899116304, -335.44709525492493, -311.26090645783916, -117.57924896719994, -463.01294047489387, -158.1555572878721, -387.3051645610053, -114.64655713640161, -278.55804986073036, -312.09088078043237, -285.66361613441796, -194.91973242311747, -378.2759790679262, -204.00819690391856, -156.3205839737621, -321.8013836398252, -192.11870750075394, -205.78516680939313, -221.71143162617966, -102.39552543123, -127.48001978727979, -125.65372142708426, -370.59597222338834, -156.3549289640511, -83.81850740010495, -219.4162619468239, -284.8948579841791, -394.3577881986434, -249.3989856343871, -464.5361050090558, -78.22536715756847, -43.531541914148995, -175.96978447995582, -196.81350927457592, -277.9349635033418, -170.51908702068596, -80.38050708776589, -144.40426177860616, -451.98910450989575, -283.5467207344647, -353.3267891766811, -270.1546882885789, -526.664378048606]
+    average total reward -274.39888410619113
+    
+
+## Test model trained with 5 frames, feeding it 5 frames to infer
+
+
+```python
+test_cnn_model('weights/best_weights_mixed.hdf5', 'csv/total_rewards_cnn_multi5.csv', False, 5)
+```
+    total rewards [-527.1682949675115, -320.67480053870196, -536.0021097062173, -477.0618172622687, -494.62787213180644, -295.894085840898, -365.2905376436389, -424.22977396896493, -407.84926897678554, -552.0762683520018, -196.24460245647526, -424.62109022766293, -603.3579254283472, -418.0742274291646, -361.82700382453004, -378.1969160013179, -448.98089280173707, -311.65936104949435, -156.65166007385895, -220.0355132012807, -412.3458595918422, -418.77671812499585, -528.2548354698462, -101.67773106800811, -268.40985509487365, -328.3367202134459, -502.5050968530464, -313.8286840142574, -63.36755720280608, -269.67156407279765, -528.8220796070304, -95.9006858336302, -139.22668583827152, -450.1367099213497, -353.1063245342407, -143.533534122074, -433.58525724396736, -205.5995129685134, -296.3733138560937, -217.31999859724186, -277.03203397571616, -160.93344686882753, -456.25485803462186, -384.92653306386626, -453.1989194806128, -411.45762847204315, -289.7344753342576, -565.9548688211115, -399.4782588609886, -248.97365437044783, -421.2981597150351, -69.32248157647821, -276.86216397324074, -627.4126739086189, -119.00430158293669, -474.15337385904536, -429.77483908264446, -377.3355196472443, -143.11182889153525, -265.73198327614216, -373.1198095776393, -164.19479291734618, -147.46019715451894, -57.60198305605752, -124.81719064251777, -428.68638022739134, -399.95218839443766, -185.01340084109188, -47.36207986720041, -429.18703818614085, -361.5483044071351, -416.3187843604814, -231.51561195375112, -476.2000216050658, -111.22699225791811, -457.9797713210322, -474.06805502753156, -268.56360244252494, -483.836093242337, -500.065939848637, -481.9853723276243, -551.7979495317784, -287.45828610327396, -281.8484074527744, -484.3316168880742, -348.0527556597841, -419.97067037018655, -305.7484625489393, -222.40412354917507, -338.92718526895686, -273.7028896745138, -415.4231790500793, -309.7765087159887, -417.5988689545952, -333.7865882960807, -182.05455406552062, -187.02529350546598, -560.0270168248383, -548.7821576541883, -348.9011848788086, -328.76683181600504, -198.94164972573316, -416.8750707759771, -422.9227175450358, -353.99513350798134, -384.3099450644856, -396.31103295805934, -377.63500946880106, -506.66339120374283, -398.34782483338734, -476.20450937998004, -342.9946729792741, -216.93388346360234, -318.6860042258308, -424.3684416677611, -433.82355709030526, -335.34597009254094, -212.76298892138863, -206.5483032491919, -420.74653628299257, -566.1781761758699, -434.8039636482031, -316.62952457369977, -328.6000318008049, -128.96257736439767, -307.0274736996271, -242.5196849326524, -62.31130404714774, -123.6082089832556, -200.85583885764402, -466.05185596076973, -309.1330592277242, -489.0635495035503, -358.0234322123665, -306.6696707065707, -147.07236485957367, -429.24552672243186, -57.193822919929886, -489.85507471206813, -341.1318590452015, -271.7845189588187, -94.843965959067, -267.2459662597595, -270.5913481464802, -307.1899048250996, -307.16474710560453, -397.1056983576987, -477.2576071546091, -169.38091256331626, -217.51016136892162, -397.3816154320097, -216.84837847890964, -527.1584620309628, -271.56594584026425, -87.9220852640697, -249.1172366890521, -184.18717858179764, -575.8772317876676, -309.80663410989814, -80.5053596432899, -339.77613773497404, -323.26607882051826, -486.9941506029309, -173.606104046802, -359.8917970463821, -470.9295931472137, -520.3137537818307, -403.62774184121645, -385.72269498862744, -271.29791466609345, -111.99505082655817, -385.31862420444907, -102.49973711902481, -470.13035411545286, -453.7694286146475, -308.33399043827694, -392.60791244236685, -505.87594248623043, -576.5971967065534, -414.1640156640865, -364.07245121001495, -277.6947217448734, -567.6918864804833, -178.7883984259389, -470.16961040787095, -410.5839676957387, -303.1117277262961, -430.64508607378866, -218.42795006833103, -302.04155776520537, -195.32141688765515, -469.2151014966904, -376.9314175838188, -246.3036639642363, -113.10520003522355, -522.5480723724246, -456.5722932578049, -441.94269629576615, -184.3449419910413, -252.9957144977407]
+    average total reward -337.3968379279792
+    
+
+## Apparently, it did not do very well... Now lest's test the RL model:
 
 
 ```python
@@ -792,23 +1565,23 @@ test_rl_model('csv/total_rewards_rl.csv')
     _________________________________________________________________
     Layer (type)                 Output Shape              Param #   
     =================================================================
-    flatten_1 (Flatten)          (None, 8)                 0         
+    flatten_2 (Flatten)          (None, 8)                 0         
     _________________________________________________________________
-    dense_1 (Dense)              (None, 50)                450       
+    dense_5 (Dense)              (None, 50)                450       
     _________________________________________________________________
-    activation_1 (Activation)    (None, 50)                0         
+    activation_5 (Activation)    (None, 50)                0         
     _________________________________________________________________
-    dense_2 (Dense)              (None, 30)                1530      
+    dense_6 (Dense)              (None, 30)                1530      
     _________________________________________________________________
-    activation_2 (Activation)    (None, 30)                0         
+    activation_6 (Activation)    (None, 30)                0         
     _________________________________________________________________
-    dense_3 (Dense)              (None, 16)                496       
+    dense_7 (Dense)              (None, 16)                496       
     _________________________________________________________________
-    activation_3 (Activation)    (None, 16)                0         
+    activation_7 (Activation)    (None, 16)                0         
     _________________________________________________________________
-    dense_4 (Dense)              (None, 4)                 68        
+    dense_8 (Dense)              (None, 4)                 68        
     _________________________________________________________________
-    activation_4 (Activation)    (None, 4)                 0         
+    activation_8 (Activation)    (None, 4)                 0         
     =================================================================
     Total params: 2,544
     Trainable params: 2,544
@@ -1031,19 +1804,35 @@ test_rl_model('csv/total_rewards_rl.csv')
 def compare_results(path_read, path_write):
     
     rl_results = pd.read_csv(os.path.join(path_read,'total_rewards_rl.csv'))
-    cnn_results = pd.read_csv(os.path.join(path_read,'total_rewards_cnn.csv'))
+    cnn_results_s = pd.read_csv(os.path.join(path_read,'total_rewards_cnn_single.csv'))
+    cnn_results_m2 = pd.read_csv(os.path.join(path_read,'total_rewards_cnn_multi2.csv'))
+    cnn_results_m3 = pd.read_csv(os.path.join(path_read,'total_rewards_cnn_multi3.csv'))
+    cnn_results_m4 = pd.read_csv(os.path.join(path_read,'total_rewards_cnn_multi4.csv'))
+    cnn_results_m5 = pd.read_csv(os.path.join(path_read,'total_rewards_cnn_multi5.csv'))
     
     mean_rl = [np.sum(rl_results)/len(rl_results)]*len(rl_results)
-    mean_cnn = [np.sum(cnn_results)/len(cnn_results)]*len(cnn_results)
+    mean_cnn_s = [np.sum(cnn_results_s)/len(cnn_results_s)]*len(cnn_results_s)
+    mean_cnn_m2 = [np.sum(cnn_results_m2)/len(cnn_results_m2)]*len(cnn_results_m2)
+    mean_cnn_m3 = [np.sum(cnn_results_m3)/len(cnn_results_m3)]*len(cnn_results_m3)
+    mean_cnn_m4 = [np.sum(cnn_results_m4)/len(cnn_results_m4)]*len(cnn_results_m4)
+    mean_cnn_m5 = [np.sum(cnn_results_m5)/len(cnn_results_m5)]*len(cnn_results_m5)
     
     fig = plt.figure()
     fig.set_size_inches(18.5, 10.5)
     plt.xlabel('Episodes')
     plt.ylabel('Reward')
     plt.plot(rl_results, 'blue', label='RL reward')
-    plt.plot(cnn_results, 'green', label='CNN reward')
-    plt.plot(mean_rl, label='RL mean reward')
-    plt.plot(mean_cnn, label='CNN mean reward')
+    plt.plot(cnn_results_s, 'green', label='CNN single reward')
+    plt.plot(cnn_results_m2, 'red', label='CNN multi 2 reward')
+    plt.plot(cnn_results_m3, 'yellow', label='CNN multi 3 reward')
+    plt.plot(cnn_results_m4, 'pink', label='CNN multi 4 reward')
+    plt.plot(cnn_results_m5, 'black', label='CNN multi 5 reward')
+    plt.plot(mean_rl, label='RL avg reward')
+    plt.plot(mean_cnn_s, label='CNN single avg reward')
+    plt.plot(mean_cnn_m2, label='CNN multi 2 avg reward')
+    plt.plot(mean_cnn_m3, label='CNN multi 3 avg reward')
+    plt.plot(mean_cnn_m4, label='CNN multi 4 avg reward')
+    plt.plot(mean_cnn_m5, label='CNN multi 5 avg reward')
     plt.xticks(range(0,200)[0::10])
     plt.legend()
     plt.savefig(path_write, dpi=300)
@@ -1056,9 +1845,13 @@ compare_results('csv/','results.png')
 ```
 
 
-![png](output_44_0.png)
+![png](output_73_0.png)
 
 
-# Conclussions:
+# Conclusions:
 
-# Surprisingly enough, we can clearly see how the RL strategy out performs the CNN strategy by a huge margin. In retrospective it makes sense, as the CNN is learning the mapping function from static images, which could be an ok strategy if we had a distribution of images that could capture a sense of the whole space, we surely added more images to fix our class imbalance, however these images were more of the same frames. Another thing that captured my interest was the disk space each of the models required, RL = 33 kb, CNN = 70 Mb, very impresive, we can see here how different architectures/strategies work better for specific tasks. On top of this, the training for the CNN took around three hours to finish, and for the RL it took around 20 minutes.
+# Surprisingly enough, we can clearly see how the RL strategy out performs the CNN strategy by a huge margin. In retrospective it makes sense, as the CNN learnt a classification function and not to maximize the landing objective. If dig a little bit deeper, the idea of using a classifier to determine the actions in the openAI environment causes issues such as a positive feedback loop, to put it in an example: the CNN sees the frame and classifies it as an "UP", this "UP" is taken by the ENV an "UP" action is produced, then the next frame is a consequence of the action taken, then the classifier is most likely to see the current frame and say it is "UP" again, producing a positive feedback loop. Even if we had a nearly perfect classifier I believe this strategy would not work. Another issue in terms of classification is that the frames were recorded from an expert playing, meaning that our example distribution is small and not representative of the whole space, so a question arises with this: what happens when the ship goes to somewhere on the screen that it has never seen before? In these cases I believe the classifier is most likely to fail making the situation even worst.
+# Another thing that captured my interest was the disk space each of the models required, RL = 33 kb, CNN = 68 Mb, very impressive, we can see here how different architectures/strategies work better for the tasks they were actually built to work with. On top of this, the training for the CNN with 100 epochs took around three hours to finish, at the end I changed this to 25 epochs as I noticed that from there on classification accuracy increased very little, I also added a couple of layers to the head of the CNN architecture and reduced the number of neurons from 256 to 100 and 50 as the images are not that complex. Having said that the RL algorithm took around 20 minutes and the results were amazing.
+
+
+
